@@ -8,6 +8,7 @@ import {
   createSkylineTexture,
   createRugTexture,
   createGalleryArtTexture,
+  createGeminiBrandedArtTexture,
   createMahoganyWoodTexture,
   createEnvironmentTexture,
 } from './textures';
@@ -440,6 +441,72 @@ export class PoolGameRenderer {
       const dec = new THREE.Mesh(decGeo, glassDecanterMat);
       dec.position.set(6.1, floorY + 1.16, dz);
       this.scene.add(dec);
+    }
+
+    // Modern Architectural Feature Painting: "Built with Gemini 3.8 Flash"
+    const geminiArtGeo = new THREE.PlaneGeometry(2.6, 1.6);
+    const geminiArtMat = new THREE.MeshPhysicalMaterial({
+      map: createGeminiBrandedArtTexture(),
+      roughness: 0.35,
+      metalness: 0.15,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.08,
+      reflectivity: 0.5,
+    });
+    const geminiArt = new THREE.Mesh(geminiArtGeo, geminiArtMat);
+    geminiArt.rotation.y = -Math.PI / 2;
+    geminiArt.position.set(6.42, 1.85, 0);
+    this.scene.add(geminiArt);
+
+    // Brushed champagne brass architectural frame around artwork
+    const geminiFrameMat = new THREE.MeshStandardMaterial({
+      color: 0xd4af37,
+      roughness: 0.25,
+      metalness: 0.85,
+    });
+    const gFrameHGeo = new THREE.BoxGeometry(0.06, 0.06, 2.72);
+    const gFrameTop = new THREE.Mesh(gFrameHGeo, geminiFrameMat);
+    gFrameTop.position.set(6.40, 2.68, 0);
+    this.scene.add(gFrameTop);
+
+    const gFrameBottom = new THREE.Mesh(gFrameHGeo, geminiFrameMat);
+    gFrameBottom.position.set(6.40, 1.02, 0);
+    this.scene.add(gFrameBottom);
+
+    const gFrameVGeo = new THREE.BoxGeometry(0.06, 1.72, 0.06);
+    const gFrameL = new THREE.Mesh(gFrameVGeo, geminiFrameMat);
+    gFrameL.position.set(6.40, 1.85, -1.33);
+    this.scene.add(gFrameL);
+
+    const gFrameR = new THREE.Mesh(gFrameVGeo, geminiFrameMat);
+    gFrameR.position.set(6.40, 1.85, 1.33);
+    this.scene.add(gFrameR);
+
+    // Dedicated gallery accent spotlight illuminating the Gemini branding
+    const artSpot = new THREE.SpotLight(0xfff7ed, 4.5, 6.0, Math.PI / 3.5, 0.45);
+    artSpot.position.set(5.8, 3.0, 0);
+    artSpot.target = geminiArt;
+    this.scene.add(artSpot);
+    this.scene.add(artSpot.target);
+
+    // Warm gallery wall-wash picture light bar mounted above the frame
+    const lightBarGeo = new THREE.CylinderGeometry(0.015, 0.015, 1.2, 16);
+    const lightBarMat = new THREE.MeshStandardMaterial({
+      color: 0xd4af37,
+      roughness: 0.2,
+      metalness: 0.9,
+    });
+    const lightBar = new THREE.Mesh(lightBarGeo, lightBarMat);
+    lightBar.position.set(6.25, 2.75, 0);
+    this.scene.add(lightBar);
+
+    // Brass support brackets mounting the picture light to the wall
+    const bracketGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.2, 12);
+    for (const bz of [-0.35, 0.35]) {
+      const bracket = new THREE.Mesh(bracketGeo, lightBarMat);
+      bracket.rotation.z = Math.PI / 2;
+      bracket.position.set(6.34, 2.75, bz);
+      this.scene.add(bracket);
     }
 
     // 6. Modern Flush Ceiling with Warm Recessed Downlights (y = 3.5)
@@ -982,22 +1049,59 @@ export class PoolGameRenderer {
 
       if (b.state === 'pocketed') {
         mesh.visible = false;
+        mesh.userData.lastPos = null;
       } else {
         mesh.visible = true;
         mesh.position.set(b.position.x, R + b.height, b.position.z);
 
-        // Physical Quaternion 3D rolling without Euler gimbal lock or wobble
-        const dt = TABLE_CONSTANTS.FIXED_TIMESTEP;
-        const angSpeed = Math.hypot(b.angularVelocity.x, b.angularVelocity.y, b.angularVelocity.z);
-        if (angSpeed > 0.0001) {
-          const axis = new THREE.Vector3(
-            b.angularVelocity.x / angSpeed,
-            b.angularVelocity.y / angSpeed,
-            b.angularVelocity.z / angSpeed
-          );
-          const deltaQuat = new THREE.Quaternion().setFromAxisAngle(axis, angSpeed * dt);
-          mesh.quaternion.premultiply(deltaQuat);
+        // 1:1 Physical rolling rotation strictly coupled to surface displacement
+        const lastPos = mesh.userData.lastPos as { x: number; z: number } | undefined;
+        if (lastPos) {
+          const dx = b.position.x - lastPos.x;
+          const dz = b.position.z - lastPos.z;
+          const dist = Math.hypot(dx, dz);
+
+          if (dist > 0.00001) {
+            // Authentic no-slip rolling rotation:
+            // For a sphere rolling on the x-z plane with +y up:
+            // Travel vector is (dx, 0, dz).
+            // Rolling rotation axis is (dz / dist, 0, -dx / dist).
+            // Angle rotated is dist / R radians.
+            const rollAngle = dist / R;
+            const rollAxis = new THREE.Vector3(dz / dist, 0, -dx / dist);
+            const rollQuat = new THREE.Quaternion().setFromAxisAngle(rollAxis, rollAngle);
+            mesh.quaternion.premultiply(rollQuat);
+          }
         }
+
+        // Apply physical sliding slip (backspin/topspin differential while sliding)
+        if (b.state === 'sliding') {
+          // Angular slip difference between current angular velocity and pure rolling velocity
+          const wxSlip = b.angularVelocity.x - (b.velocity.z / R);
+          const wzSlip = b.angularVelocity.z - (-b.velocity.x / R);
+          const slipSpeed = Math.hypot(wxSlip, wzSlip);
+          if (slipSpeed > 0.05) {
+            const now = performance.now();
+            const lastTime = (mesh.userData.lastTime as number) || now;
+            const dt = Math.min(Math.max((now - lastTime) / 1000, 0.005), 0.033);
+            const slipAxis = new THREE.Vector3(wxSlip / slipSpeed, 0, wzSlip / slipSpeed);
+            const slipQuat = new THREE.Quaternion().setFromAxisAngle(slipAxis, slipSpeed * dt);
+            mesh.quaternion.premultiply(slipQuat);
+          }
+        }
+
+        // Apply vertical English spin around Y axis
+        if (Math.abs(b.angularVelocity.y) > 0.01) {
+          const now = performance.now();
+          const lastTime = (mesh.userData.lastTime as number) || now;
+          const dt = Math.min(Math.max((now - lastTime) / 1000, 0.005), 0.033);
+          const spinAngle = b.angularVelocity.y * dt;
+          const spinQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), spinAngle);
+          mesh.quaternion.premultiply(spinQuat);
+        }
+
+        mesh.userData.lastPos = { x: b.position.x, z: b.position.z };
+        mesh.userData.lastTime = performance.now();
       }
     }
   }

@@ -578,3 +578,187 @@ export function createGalleryArtTexture(): THREE.CanvasTexture {
   const texture = new THREE.CanvasTexture(canvas);
   return texture;
 }
+
+/**
+ * Creates ultra-crisp gallery branding masterpiece for the feature wall:
+ * "Built with Gemini 3.8 Flash" with iconic radiant Gemini sparkle insignia,
+ * cyan/purple aurora glow, and modern architectural typography.
+ */
+export function createGeminiBrandedArtTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 640;
+  const ctx = canvas.getContext('2d')!;
+
+  // 1. Deep luxury obsidian & midnight-blue backdrop
+  const bgGrad = ctx.createRadialGradient(512, 320, 40, 512, 320, 580);
+  bgGrad.addColorStop(0.0, '#0d1527');
+  bgGrad.addColorStop(0.45, '#070b14');
+  bgGrad.addColorStop(1.0, '#030509');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 2. Ambient chromatic auroral blooms
+  // Cyan bloom (left-center)
+  const cyanGlow = ctx.createRadialGradient(380, 200, 10, 380, 200, 260);
+  cyanGlow.addColorStop(0.0, 'rgba(56, 189, 248, 0.22)');
+  cyanGlow.addColorStop(0.6, 'rgba(56, 189, 248, 0.05)');
+  cyanGlow.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = cyanGlow;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Violet/purple bloom (right-center)
+  const violetGlow = ctx.createRadialGradient(640, 240, 10, 640, 240, 280);
+  violetGlow.addColorStop(0.0, 'rgba(168, 85, 247, 0.20)');
+  violetGlow.addColorStop(0.6, 'rgba(168, 85, 247, 0.04)');
+  violetGlow.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = violetGlow;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 3. Subtle architectural geometric micro-grid
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.025)';
+  ctx.lineWidth = 1;
+  for (let x = 64; x < canvas.width; x += 64) {
+    ctx.beginPath();
+    ctx.moveTo(x, 32);
+    ctx.lineTo(x, canvas.height - 32);
+    ctx.stroke();
+  }
+  for (let y = 64; y < canvas.height; y += 64) {
+    ctx.beginPath();
+    ctx.moveTo(32, y);
+    ctx.lineTo(canvas.width - 32, y);
+    ctx.stroke();
+  }
+
+  // 4. Inset architectural gallery border
+  ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(28, 28, canvas.width - 56, canvas.height - 56);
+
+  ctx.strokeStyle = 'rgba(251, 191, 36, 0.35)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(34, 34, canvas.width - 68, canvas.height - 68);
+
+  // Corner decorative registration marks
+  const corners = [
+    [42, 42],
+    [canvas.width - 42, 42],
+    [42, canvas.height - 42],
+    [canvas.width - 42, canvas.height - 42],
+  ];
+  ctx.strokeStyle = '#38bdf8';
+  ctx.lineWidth = 2;
+  for (const [cx, cy] of corners) {
+    const sx = cx < 500 ? 1 : -1;
+    const sy = cy < 300 ? 1 : -1;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + sy * 14);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx + sx * 14, cy);
+    ctx.stroke();
+  }
+
+  // 5. Draw Iconic Gemini 4-Pointed Sparkle Star
+  const drawSparkle = (cx: number, cy: number, outerR: number, innerR: number, angle: number = 0) => {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+
+    const starGrad = ctx.createLinearGradient(-outerR, -outerR, outerR, outerR);
+    starGrad.addColorStop(0.0, '#38bdf8'); // cyan
+    starGrad.addColorStop(0.4, '#818cf8'); // indigo
+    starGrad.addColorStop(0.8, '#c084fc'); // purple
+    starGrad.addColorStop(1.0, '#fbbf24'); // gold tip
+    ctx.fillStyle = starGrad;
+
+    ctx.beginPath();
+    // 4 points with smooth concave arcs
+    ctx.moveTo(0, -outerR);
+    ctx.quadraticCurveTo(innerR, -innerR, outerR, 0);
+    ctx.quadraticCurveTo(innerR, innerR, 0, outerR);
+    ctx.quadraticCurveTo(-innerR, innerR, -outerR, 0);
+    ctx.quadraticCurveTo(-innerR, -innerR, 0, -outerR);
+    ctx.closePath();
+    ctx.fill();
+
+    // Central radiant white flare
+    const flare = ctx.createRadialGradient(0, 0, 0, 0, 0, innerR * 1.8);
+    flare.addColorStop(0.0, '#ffffff');
+    flare.addColorStop(0.4, 'rgba(255, 255, 255, 0.8)');
+    flare.addColorStop(1.0, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = flare;
+    ctx.beginPath();
+    ctx.arc(0, 0, innerR * 1.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  };
+
+  // Primary Gemini Sparkle Star
+  drawSparkle(512, 170, 75, 14);
+
+  // Companion secondary star (Gemini twin-star hallmark)
+  drawSparkle(615, 120, 28, 5.5, Math.PI / 12);
+  drawSparkle(415, 225, 20, 4, -Math.PI / 8);
+
+  // 6. Modern Typographic Branding
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // "BUILT WITH"
+  ctx.fillStyle = '#38bdf8';
+  ctx.font = '700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.letterSpacing = '10px';
+  ctx.fillText('BUILT WITH', 512, 290);
+
+  // "Gemini 3.8 Flash"
+  const textGrad = ctx.createLinearGradient(200, 370, 824, 370);
+  textGrad.addColorStop(0.0, '#ffffff');
+  textGrad.addColorStop(0.65, '#f8fafc');
+  textGrad.addColorStop(0.85, '#e0e7ff');
+  textGrad.addColorStop(1.0, '#93c5fd');
+
+  ctx.fillStyle = textGrad;
+  ctx.font = '900 64px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.letterSpacing = '2px';
+  // Subtle outer drop shadow glow
+  ctx.shadowColor = 'rgba(56, 189, 248, 0.45)';
+  ctx.shadowBlur = 18;
+  ctx.fillText('Gemini 3.8 Flash', 512, 365);
+
+  ctx.shadowBlur = 0; // reset shadow
+
+  // 7. Glowing Laser Separator Bar
+  const lineGrad = ctx.createLinearGradient(220, 430, 804, 430);
+  lineGrad.addColorStop(0.0, 'rgba(56, 189, 248, 0)');
+  lineGrad.addColorStop(0.3, '#38bdf8');
+  lineGrad.addColorStop(0.5, '#ffffff');
+  lineGrad.addColorStop(0.7, '#a855f7');
+  lineGrad.addColorStop(1.0, 'rgba(168, 85, 247, 0)');
+  ctx.fillStyle = lineGrad;
+  ctx.fillRect(220, 428, 584, 2.5);
+
+  // Central glowing ruby/gold jewel node
+  ctx.fillStyle = '#38bdf8';
+  ctx.beginPath();
+  ctx.arc(512, 429, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 8. Engineering Subtitle & Technical Credentials
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '600 16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.letterSpacing = '5px';
+  ctx.fillText('INTELLIGENT 3D BILLIARDS SIMULATION', 512, 475);
+
+  // Bottom Technical Badge
+  ctx.fillStyle = '#64748b';
+  ctx.font = '500 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+  ctx.letterSpacing = '2.5px';
+  ctx.fillText('120HZ RIGID BODY DYNAMICS • PBR RAYTRACED SHADING • WPA RULES', 512, 535);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+

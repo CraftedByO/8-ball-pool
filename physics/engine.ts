@@ -87,10 +87,12 @@ export class BilliardsPhysicsEngine {
     const I = TABLE_CONSTANTS.MOMENT_OF_INERTIA;
 
     // Angular velocity from strike
-    // Perpendicular vector to shot is (-sinA, 0, cosA)
+    // Shot direction is (cosA, 0, sinA).
+    // Forward rolling axis is (sinA, 0, -cosA).
+    // Follow (b > 0) creates forward roll; draw (b < 0) creates backspin.
     const rollRate = (b * impulse) / I;
-    cueBall.angularVelocity.x = -sinA * rollRate;
-    cueBall.angularVelocity.z = cosA * rollRate;
+    cueBall.angularVelocity.x = sinA * rollRate;
+    cueBall.angularVelocity.z = -cosA * rollRate;
     cueBall.angularVelocity.y = -(a * impulse) / I; // English spin (vertical axis)
 
     cueBall.state = 'sliding';
@@ -146,13 +148,12 @@ export class BilliardsPhysicsEngine {
     const mu_r = TABLE_CONSTANTS.ROLLING_RESISTANCE_COEFF;
 
     // Surface relative velocity at point of contact:
-    // v_contact = (vx - R * wz, vz + R * wx)
-    const vRelX = ball.velocity.x - R * ball.angularVelocity.z;
-    const vRelZ = ball.velocity.z + R * ball.angularVelocity.x;
+    // v_contact = v + omega x (0, -R, 0) = (vx + R * wz, 0, vz - R * wx)
+    const vRelX = ball.velocity.x + R * ball.angularVelocity.z;
+    const vRelZ = ball.velocity.z - R * ball.angularVelocity.x;
     const vRelSpeed = Math.hypot(vRelX, vRelZ);
 
     // Maximum delta vRel that sliding friction can apply in dt without overshooting:
-    // dvRel/dt = a_linear + R * alpha_torque = mu_s * g + (5/2) * mu_s * g = 3.5 * mu_s * g
     const maxDeltaVRel = 3.5 * mu_s * g * dt;
 
     if (vRelSpeed > maxDeltaVRel) {
@@ -167,15 +168,15 @@ export class BilliardsPhysicsEngine {
       ball.velocity.x -= uRelX * aLinear * dt;
       ball.velocity.z -= uRelZ * aLinear * dt;
 
-      ball.angularVelocity.z += uRelX * alphaTorque * dt;
-      ball.angularVelocity.x -= uRelZ * alphaTorque * dt;
+      // Friction torque at contact point opposes slip
+      ball.angularVelocity.z -= uRelX * alphaTorque * dt;
+      ball.angularVelocity.x += uRelZ * alphaTorque * dt;
     } else if (vRelSpeed > 0.0001) {
       // Relative velocity reaches zero within this timestep -> exact transition to pure rolling
-      // dv_linear = -(2/7) * vRel, d(R * omega) = +(5/7) * vRel
       ball.velocity.x -= (2 / 7) * vRelX;
       ball.velocity.z -= (2 / 7) * vRelZ;
-      ball.angularVelocity.z = ball.velocity.x / R;
-      ball.angularVelocity.x = -ball.velocity.z / R;
+      ball.angularVelocity.x = ball.velocity.z / R;
+      ball.angularVelocity.z = -ball.velocity.x / R;
       ball.state = 'rolling';
     }
 
@@ -198,8 +199,8 @@ export class BilliardsPhysicsEngine {
         ball.velocity.z = uZ * newSpeed;
 
         // In rolling state, synchronize rotation with rolling
-        ball.angularVelocity.x = -ball.velocity.z / R;
-        ball.angularVelocity.z = ball.velocity.x / R;
+        ball.angularVelocity.x = ball.velocity.z / R;
+        ball.angularVelocity.z = -ball.velocity.x / R;
         ball.state = 'rolling';
       }
     } else {
