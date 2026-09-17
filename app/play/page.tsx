@@ -3,7 +3,12 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { PoolGameRenderer } from '../../game/scene';
 import { BilliardsPhysicsEngine } from '../../physics/engine';
-import { createStandard8BallRack } from '../../physics/setup';
+import {
+  createStandard8BallRack,
+  isBallInHandPlacementValid,
+  clampBallInHandPosition,
+  findClearCueBallSpot,
+} from '../../physics/setup';
 import { calculateAimTrajectory } from '../../physics/trajectory';
 import { EightBallRulesEngine } from '../../rules/engine';
 import { BilliardsAIEngine } from '../../ai/engine';
@@ -19,6 +24,7 @@ import { PlayerProfile } from '../../leaderboard/types';
 import { TABLE_CONSTANTS } from '../../physics/constants';
 import { CollisionEvent } from '../../physics/types';
 import { RulesState } from '../../rules/types';
+import { Check, Move } from 'lucide-react';
 
 export default function SinglePlayerGame() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -59,6 +65,8 @@ export default function SinglePlayerGame() {
   const [isAiThinking, setIsAiThinking] = useState<boolean>(false);
   const [cameraMode, setCameraMode] = useState<'player' | 'overhead'>('player');
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isPlacementValid, setIsPlacementValid] = useState<boolean>(true);
+  const isDraggingCueBallRef = useRef<boolean>(false);
 
   // Match Result State
   const [matchResult, setMatchResult] = useState<{
@@ -133,6 +141,7 @@ export default function SinglePlayerGame() {
           renderer.updateBalls(physics.getBalls());
           renderer.updateCueStick(physics.getCueBall(), currentAimAngle, 0, false);
           renderer.updateTrajectory(null, false);
+          renderer.updateBallInHandGuide(false);
         } else {
           // Stationary state: Update cue stick & trajectory line
           const cueBall = physics.getCueBall();
@@ -146,12 +155,25 @@ export default function SinglePlayerGame() {
             const traj = calculateAimTrajectory(cueBall, currentAimAngle, physics.getBalls());
             renderer.updateTrajectory(traj, true);
             renderer.updateCueStick(cueBall, currentAimAngle, currentPower, true);
+            renderer.updateBallInHandGuide(false);
+          } else if (rulesState.isBallInHand && isHumanTurn) {
+            renderer.updateTrajectory(null, false);
+            renderer.updateCueStick(cueBall, currentAimAngle, 0, false);
+            if (cueBall) {
+              const valid = isBallInHandPlacementValid(
+                cueBall.position,
+                physics.getBalls(),
+                rulesState.isBreakShot
+              );
+              renderer.updateBallInHandGuide(true, cueBall.position, valid);
+            }
           } else {
             renderer.updateTrajectory(null, false);
             renderer.updateCueStick(cueBall, currentAimAngle, 0, false);
+            renderer.updateBallInHandGuide(false);
           }
 
-          renderer.updateCamera(cueBall, currentAimAngle);
+          renderer.updateCamera(cueBall, currentAimAngle, rulesState.isBallInHand && isHumanTurn);
         }
       }
       animId = requestAnimationFrame(loop);
@@ -174,6 +196,26 @@ export default function SinglePlayerGame() {
       const physics = physicsRef.current!;
       const rules = rulesRef.current;
       const ai = aiRef.current;
+
+      if (rules.getState().isBallInHand) {
+        const placement = ai.chooseBallInHandPlacement(
+          physics.getBalls(),
+          rules,
+          'player2'
+        );
+        const cue = physics.getCueBall();
+        if (cue) {
+          cue.state = 'active';
+          cue.position.x = placement.x;
+          cue.position.z = placement.z;
+          cue.height = 0;
+          cue.velocity = { x: 0, z: 0 };
+          cue.angularVelocity = { x: 0, y: 0, z: 0 };
+        }
+        rules.clearBallInHand();
+        setRulesState({ ...rules.getState() });
+        rendererRef.current?.updateBalls(physics.getBalls());
+      }
 
       const decision = ai.planShot(physics.getBalls(), rules, 'player2');
       if (!decision) {
@@ -217,10 +259,21 @@ export default function SinglePlayerGame() {
               const cue = physics.getCueBall();
               if (cue) {
                 cue.state = 'active';
-                cue.position = { x: -TABLE_CONSTANTS.TABLE_LENGTH * 0.25, z: 0 };
+                const clearSpot = findClearCueBallSpot(
+                  { x: -TABLE_CONSTANTS.TABLE_LENGTH * 0.25, z: 0 },
+                  physics.getBalls(),
+                  rules.getState().isBreakShot
+                );
+                cue.position.x = clearSpot.x;
+                cue.position.z = clearSpot.z;
                 cue.height = 0;
                 cue.velocity = { x: 0, z: 0 };
+                cue.angularVelocity = { x: 0, y: 0, z: 0 };
               }
+            }
+
+            if (validation.ballInHand && validation.nextTurn === 'player1') {
+              setIsPlacementValid(true);
             }
 
             if (validation.winner) {
@@ -286,10 +339,21 @@ export default function SinglePlayerGame() {
           const cue = physics.getCueBall();
           if (cue) {
             cue.state = 'active';
-            cue.position = { x: -TABLE_CONSTANTS.TABLE_LENGTH * 0.25, z: 0 };
+            const clearSpot = findClearCueBallSpot(
+              { x: -TABLE_CONSTANTS.TABLE_LENGTH * 0.25, z: 0 },
+              physics.getBalls(),
+              rules.getState().isBreakShot
+            );
+            cue.position.x = clearSpot.x;
+            cue.position.z = clearSpot.z;
             cue.height = 0;
             cue.velocity = { x: 0, z: 0 };
+            cue.angularVelocity = { x: 0, y: 0, z: 0 };
           }
+        }
+
+        if (validation.ballInHand && validation.nextTurn === 'player1') {
+          setIsPlacementValid(true);
         }
 
         if (validation.winner) {
@@ -309,11 +373,67 @@ export default function SinglePlayerGame() {
     }, 100);
   }, [aimAngle, power, spinX, spinY, isShooting, profile, difficulty, triggerAiTurn]);
 
-  // Mouse & Touch Drag Aiming Controls
+  // Ball-in-Hand Interactive Placement Logic
+  const moveCueBallTo = useCallback((clientX: number, clientY: number) => {
+    if (!physicsRef.current || !rendererRef.current) return;
+    const pt = rendererRef.current.getTableIntersection(clientX, clientY);
+    if (!pt) return;
+
+    const isBreak = rulesRef.current.getState().isBreakShot;
+    const clamped = clampBallInHandPosition(pt, isBreak);
+    const valid = isBallInHandPlacementValid(clamped, physicsRef.current.getBalls(), isBreak);
+
+    const cue = physicsRef.current.getCueBall();
+    if (cue) {
+      cue.state = 'active';
+      cue.position.x = clamped.x;
+      cue.position.z = clamped.z;
+      cue.height = 0;
+      cue.velocity = { x: 0, z: 0 };
+      cue.angularVelocity = { x: 0, y: 0, z: 0 };
+    }
+
+    setIsPlacementValid(valid);
+    rendererRef.current.updateBalls(physicsRef.current.getBalls());
+    rendererRef.current.updateBallInHandGuide(true, clamped, valid);
+  }, []);
+
+  const handleConfirmPlacement = useCallback(() => {
+    const rules = rulesRef.current;
+    const physics = physicsRef.current;
+    if (!rules || !physics || !rules.getState().isBallInHand) return;
+
+    const cue = physics.getCueBall();
+    if (!cue) return;
+
+    const isBreak = rules.getState().isBreakShot;
+    const valid = isBallInHandPlacementValid(cue.position, physics.getBalls(), isBreak);
+    if (!valid) return;
+
+    cue.state = 'active';
+    cue.velocity = { x: 0, z: 0 };
+    cue.angularVelocity = { x: 0, y: 0, z: 0 };
+    rules.clearBallInHand();
+    setRulesState({ ...rules.getState() });
+
+    if (rendererRef.current) {
+      rendererRef.current.updateBallInHandGuide(false);
+    }
+    soundFX.playCushionHit(0.25);
+  }, []);
+
+  // Mouse & Touch Drag Aiming / Ball-in-Hand Controls
   const isPointerAiming = useRef(false);
   const lastPointerX = useRef(0);
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    const isBallInHandActive = rulesState.isBallInHand && rulesState.currentTurn === 'player1';
+    if (isBallInHandActive) {
+      isDraggingCueBallRef.current = true;
+      moveCueBallTo(e.clientX, e.clientY);
+      return;
+    }
+
     if ((e.target as HTMLElement).tagName === 'CANVAS') {
       isPointerAiming.current = true;
       lastPointerX.current = e.clientX;
@@ -321,6 +441,14 @@ export default function SinglePlayerGame() {
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    const isBallInHandActive = rulesState.isBallInHand && rulesState.currentTurn === 'player1';
+    if (isBallInHandActive) {
+      if (isDraggingCueBallRef.current) {
+        moveCueBallTo(e.clientX, e.clientY);
+      }
+      return;
+    }
+
     if (!isPointerAiming.current) return;
     const deltaX = e.clientX - lastPointerX.current;
     lastPointerX.current = e.clientX;
@@ -329,6 +457,7 @@ export default function SinglePlayerGame() {
   };
 
   const handlePointerUp = () => {
+    isDraggingCueBallRef.current = false;
     isPointerAiming.current = false;
   };
 
@@ -336,6 +465,15 @@ export default function SinglePlayerGame() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+
+      const currentRulesState = rulesRef.current.getState();
+      if (currentRulesState.isBallInHand && currentRulesState.currentTurn === 'player1') {
+        if (e.code === 'Space' || e.code === 'Enter') {
+          e.preventDefault();
+          handleConfirmPlacement();
+          return;
+        }
+      }
 
       if (e.code === 'Space') {
         e.preventDefault();
@@ -357,26 +495,11 @@ export default function SinglePlayerGame() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleShoot, updatePower, updateAimAngle]);
+  }, [handleShoot, updatePower, updateAimAngle, handleConfirmPlacement]);
 
   const handleWheel = (e: React.WheelEvent) => {
     const delta = e.deltaY < 0 ? 0.04 : -0.04;
     updatePower(p => Math.max(0.05, Math.min(1.0, +(p + delta).toFixed(2))));
-  };
-
-  const handlePlaceBallInHand = () => {
-    const rules = rulesRef.current;
-    const physics = physicsRef.current;
-    if (!rules.getState().isBallInHand || !physics) return;
-
-    const cue = physics.getCueBall();
-    if (cue) {
-      cue.state = 'active';
-      cue.position.x = -0.635;
-      cue.position.z = 0;
-      rules.clearBallInHand();
-      setRulesState({ ...rules.getState() });
-    }
   };
 
   const startNewMatch = (diff: AIDifficulty) => {
@@ -389,6 +512,7 @@ export default function SinglePlayerGame() {
       const balls = createStandard8BallRack();
       physicsRef.current.setBalls(balls);
       rendererRef.current.updateBalls(balls);
+      rendererRef.current.updateBallInHandGuide(false);
     }
     setMatchResult(null);
     setGameStarted(true);
@@ -451,8 +575,11 @@ export default function SinglePlayerGame() {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onWheel={handleWheel}
-        onClick={rulesState.isBallInHand ? handlePlaceBallInHand : undefined}
-        className="relative flex-1 w-full h-full cursor-grab active:cursor-grabbing touch-none select-none"
+        className={`relative flex-1 w-full h-full touch-none select-none ${
+          rulesState.isBallInHand && rulesState.currentTurn === 'player1'
+            ? 'cursor-move'
+            : 'cursor-grab active:cursor-grabbing'
+        }`}
       />
 
       {gameStarted && (
@@ -472,7 +599,55 @@ export default function SinglePlayerGame() {
         />
       )}
 
-      {gameStarted && rulesState.currentTurn === 'player1' && !isShooting && (
+      {/* Ball-in-Hand Placement Action Controls */}
+      {gameStarted && rulesState.currentTurn === 'player1' && !isShooting && rulesState.isBallInHand && (
+        <div className="absolute bottom-6 inset-x-0 pointer-events-none flex justify-center px-4 sm:px-8 z-30">
+          <div className="pointer-events-auto bg-neutral-900/95 backdrop-blur-md border border-neutral-700/80 p-4 rounded-3xl shadow-2xl flex flex-col sm:flex-row items-center space-y-3 sm:space-y-0 sm:space-x-6 max-w-lg w-full justify-between">
+            <div className="flex items-center space-x-3 text-left">
+              <div
+                className={`p-2.5 rounded-2xl ${
+                  isPlacementValid
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                }`}
+              >
+                <Move className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center space-x-1.5">
+                  <span>Ball in Hand</span>
+                  {rulesState.isBreakShot && (
+                    <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      Behind Head String
+                    </span>
+                  )}
+                </h4>
+                <p className={`text-xs mt-0.5 ${isPlacementValid ? 'text-neutral-400' : 'text-rose-400 font-medium'}`}>
+                  {isPlacementValid
+                    ? 'Click or drag anywhere on table to position cue ball'
+                    : 'Overlapping another ball or cushion! Reposition cue ball.'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleConfirmPlacement}
+              disabled={!isPlacementValid}
+              className={`px-5 py-2.5 rounded-2xl font-bold text-xs tracking-wider transition shadow-lg flex items-center space-x-2 shrink-0 ${
+                isPlacementValid
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-neutral-950 hover:scale-105 active:scale-95 cursor-pointer shadow-emerald-500/20'
+                  : 'bg-neutral-800 text-neutral-500 border border-neutral-700 cursor-not-allowed opacity-60'
+              }`}
+            >
+              <Check className="w-4 h-4 stroke-[2.5]" />
+              <span>Confirm Spot</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Standard Cue Aiming & Power Controls */}
+      {gameStarted && rulesState.currentTurn === 'player1' && !isShooting && !rulesState.isBallInHand && (
         <div className="absolute bottom-4 inset-x-0 pointer-events-none flex justify-between items-end px-4 sm:px-8 z-20">
           <div className="pointer-events-auto bg-neutral-900/85 backdrop-blur-md border border-neutral-800 p-3 rounded-2xl shadow-2xl">
             <SpinControl

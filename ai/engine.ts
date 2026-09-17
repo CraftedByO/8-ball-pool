@@ -1,5 +1,6 @@
 import { TABLE_CONSTANTS, POCKETS, Vector2D } from '../physics/constants';
 import { BallPhysicsState } from '../physics/types';
+import { isBallInHandPlacementValid, findClearCueBallSpot } from '../physics/setup';
 import { EightBallRulesEngine } from '../rules/engine';
 import { PlayerId } from '../rules/types';
 import { AIDifficulty, AIShotDecision } from './types';
@@ -282,4 +283,52 @@ export class BilliardsAIEngine {
     decision.shotParams.angle += jitterAngle;
     decision.shotParams.power = Math.max(0.15, Math.min(1.0, decision.shotParams.power + jitterPower));
   }
+
+  /**
+   * Determine strategic cue ball placement when AI has Ball-in-Hand
+   */
+  public chooseBallInHandPlacement(
+    balls: BallPhysicsState[],
+    rules: EightBallRulesEngine,
+    aiPlayer: PlayerId
+  ): { x: number; z: number } {
+    const isBreak = rules.getState().isBreakShot;
+    const remainingBalls = balls.filter(b => b.state !== 'pocketed' && b.state !== 'falling' && b.id !== 0);
+    const remainingIds = remainingBalls.map(b => b.id);
+    const on8Ball = rules.isPlayerOnEightBall(aiPlayer, remainingIds);
+
+    let candidateBalls = remainingBalls;
+    if (on8Ball) {
+      candidateBalls = remainingBalls.filter(b => b.id === 8);
+    } else if (rules.getState().groups[aiPlayer]) {
+      const myGroup = rules.getState().groups[aiPlayer];
+      candidateBalls = remainingBalls.filter(b => {
+        if (myGroup === 'solids') return b.id >= 1 && b.id <= 7;
+        return b.id >= 9 && b.id <= 15;
+      });
+    }
+
+    // Try to line up behind a candidate ball pointing directly into an open pocket
+    for (const targetBall of candidateBalls) {
+      for (const pocket of POCKETS) {
+        const dirX = targetBall.position.x - pocket.position.x;
+        const dirZ = targetBall.position.z - pocket.position.z;
+        const len = Math.hypot(dirX, dirZ);
+        if (len === 0) continue;
+
+        const placeDistance = 0.32; // 32cm back
+        const testX = targetBall.position.x + (dirX / len) * placeDistance;
+        const testZ = targetBall.position.z + (dirZ / len) * placeDistance;
+
+        if (isBallInHandPlacementValid({ x: testX, z: testZ }, balls, isBreak)) {
+          return { x: testX, z: testZ };
+        }
+      }
+    }
+
+    // Fallback: clear spot on head string
+    const fallback = { x: -TABLE_CONSTANTS.TABLE_LENGTH * 0.25, z: 0 };
+    return findClearCueBallSpot(fallback, balls, isBreak);
+  }
 }
+

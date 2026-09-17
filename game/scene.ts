@@ -121,6 +121,9 @@ export class PoolGameRenderer {
   private targetBallLine: THREE.Line | null = null;
   private cueReflectLine: THREE.Line | null = null;
   private ghostBallGroup: THREE.Group | null = null;
+  private ballInHandGuide: THREE.Group | null = null;
+  private guideRingMesh: THREE.Mesh | null = null;
+  private guideDiscMesh: THREE.Mesh | null = null;
   private container: HTMLElement;
   private animationFrameId: number | null = null;
 
@@ -161,6 +164,7 @@ export class PoolGameRenderer {
     this.buildPoolTable();
     this.buildCueStick();
     this.buildTrajectoryVisualizer();
+    this.buildBallInHandGuide();
 
     window.addEventListener('resize', this.onResize);
     this.startRenderLoop();
@@ -1017,6 +1021,87 @@ export class PoolGameRenderer {
   }
 
   /**
+   * Builds the luminous 3D table surface guide indicator for Ball-in-Hand positioning
+   */
+  private buildBallInHandGuide() {
+    const R = TABLE_CONSTANTS.BALL_RADIUS;
+    this.ballInHandGuide = new THREE.Group();
+    this.ballInHandGuide.visible = false;
+
+    // Glowing circle ring on table surface
+    const ringGeo = new THREE.RingGeometry(R * 1.05, R * 1.35, 36);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x10b981,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.guideRingMesh = new THREE.Mesh(ringGeo, ringMat);
+    this.guideRingMesh.rotation.x = -Math.PI / 2;
+    this.guideRingMesh.position.y = 0.0012;
+    this.ballInHandGuide.add(this.guideRingMesh);
+
+    // Semi-transparent inner base disc
+    const discGeo = new THREE.CircleGeometry(R * 1.02, 32);
+    const discMat = new THREE.MeshBasicMaterial({
+      color: 0x10b981,
+      transparent: true,
+      opacity: 0.25,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.guideDiscMesh = new THREE.Mesh(discGeo, discMat);
+    this.guideDiscMesh.rotation.x = -Math.PI / 2;
+    this.guideDiscMesh.position.y = 0.001;
+    this.ballInHandGuide.add(this.guideDiscMesh);
+
+    this.scene.add(this.ballInHandGuide);
+  }
+
+  /**
+   * Update or toggle the Ball-in-Hand positioning ring
+   */
+  public updateBallInHandGuide(visible: boolean, pos?: { x: number; z: number }, isValid: boolean = true) {
+    if (!this.ballInHandGuide) return;
+    this.ballInHandGuide.visible = visible;
+
+    if (visible && pos) {
+      this.ballInHandGuide.position.set(pos.x, 0, pos.z);
+      const color = isValid ? 0x10b981 : 0xf43f5e; // Emerald when valid, Rose when colliding
+      if (this.guideRingMesh) {
+        (this.guideRingMesh.material as THREE.MeshBasicMaterial).color.setHex(color);
+      }
+      if (this.guideDiscMesh) {
+        (this.guideDiscMesh.material as THREE.MeshBasicMaterial).color.setHex(color);
+      }
+    }
+  }
+
+  /**
+   * Raycast from screen coordinates (clientX, clientY) to the horizontal table playing bed (Y = 0)
+   */
+  public getTableIntersection(clientX: number, clientY: number): { x: number; z: number } | null {
+    if (!this.renderer || !this.camera) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+
+    const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const target = new THREE.Vector3();
+    const hit = raycaster.ray.intersectPlane(tablePlane, target);
+    if (hit) {
+      return { x: target.x, z: target.z };
+    }
+    return null;
+  }
+
+  /**
    * Synchronize 3D meshes with physics ball states
    */
   public updateBalls(balls: BallPhysicsState[]) {
@@ -1231,10 +1316,14 @@ export class PoolGameRenderer {
   /**
    * Set dynamic camera positioning
    */
-  public updateCamera(cueBall?: BallPhysicsState, aimAngle: number = 0) {
+  public updateCamera(cueBall?: BallPhysicsState, aimAngle: number = 0, isBallInHand: boolean = false) {
     if (this.cameraMode === 'overhead') {
       // Tactical top-down view
       this.targetCameraPos.set(0, 3.2, 0);
+      this.targetCameraLookAt.set(0, 0, 0);
+    } else if (isBallInHand) {
+      // Elevated perspective view for intuitive ball placement across entire table
+      this.targetCameraPos.set(0, 2.3, 1.75);
       this.targetCameraLookAt.set(0, 0, 0);
     } else if (cueBall) {
       // Over-the-shoulder cue aiming view
