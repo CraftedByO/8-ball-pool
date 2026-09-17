@@ -1,0 +1,35 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Unique username reservations: only allow claiming if not taken
+    match /usernames/{username} {
+      allow read: if true;
+      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false; // immutable reservations
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && (request.auth.uid == userId || resource.data.uid == userId);
+    }
+
+    // Multiplayer matches
+    match /matches/{matchId} {
+      allow read: if true;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null && (
+        resource.data.player1.uid == request.auth.uid ||
+        resource.data.player2.uid == request.auth.uid ||
+        resource.data.status == 'waiting'
+      );
+    }
+
+    // Match history
+    match /match_history/{historyId} {
+      allow read: if true;
+      allow create: if request.auth != null;
+    }
+  }
+}

@@ -1,0 +1,542 @@
+import { TABLE_CONSTANTS, POCKETS, CUSHION_SEGMENTS, Vector2D } from './constants';
+import { BallPhysicsState, ShotParameters, CollisionEvent, SimulationSnapshot } from './types';
+
+export class BilliardsPhysicsEngine {
+  private balls: BallPhysicsState[] = [];
+  private events: CollisionEvent[] = [];
+  private simulationTime: number = 0;
+
+  constructor(initialBalls?: BallPhysicsState[]) {
+    if (initialBalls) {
+      this.balls = initialBalls.map(b => ({
+        ...b,
+        position: { ...b.position },
+        velocity: { ...b.velocity },
+        angularVelocity: { ...b.angularVelocity },
+      }));
+    }
+  }
+
+  public setBalls(balls: BallPhysicsState[]) {
+    this.balls = balls.map(b => ({
+      ...b,
+      position: { ...b.position },
+      velocity: { ...b.velocity },
+      angularVelocity: { ...b.angularVelocity },
+    }));
+  }
+
+  public getBalls(): BallPhysicsState[] {
+    return this.balls;
+  }
+
+  public getCueBall(): BallPhysicsState | undefined {
+    return this.balls.find(b => b.id === 0);
+  }
+
+  public isMoving(): boolean {
+    const vEps = TABLE_CONSTANTS.VELOCITY_EPSILON;
+
+    for (const ball of this.balls) {
+      if (ball.state === 'pocketed') continue;
+      if (ball.state === 'falling') return true;
+
+      const speedSq = ball.velocity.x * ball.velocity.x + ball.velocity.z * ball.velocity.z;
+      if (speedSq > vEps * vEps) return true;
+
+      // In-place vertical spin check (spinning like a top)
+      if (Math.abs(ball.angularVelocity.y) > 0.5) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Strike the cue ball with realistic physics
+   * power: 0.0 - 1.0 (maps to 0 - 6.5 m/s break speed)
+   * angle: radians on X-Z plane
+   * spinX: -1 to 1 (left/right english)
+   * spinY: -1 to 1 (topspin/backspin)
+   */
+  public strikeCueBall(params: ShotParameters): boolean {
+    const cueBall = this.getCueBall();
+    if (!cueBall || cueBall.state === 'pocketed' || cueBall.state === 'falling') {
+      return false;
+    }
+
+    const maxSpeed = 14.5; // m/s (pro tournament break speed ~32.4 mph)
+    const speed = Math.max(0.2, Math.pow(params.power, 1.25) * maxSpeed);
+    const R = TABLE_CONSTANTS.BALL_RADIUS;
+
+    // Contact offset on ball surface (-R to R)
+    const maxOffset = 0.75 * R; // safe chalked tip limit
+    const a = params.spinX * maxOffset; // horizontal offset (left/right)
+    const b = params.spinY * maxOffset; // vertical offset (top/bottom)
+
+    // Primary strike direction
+    const cosA = Math.cos(params.angle);
+    const sinA = Math.sin(params.angle);
+
+    cueBall.velocity.x = speed * cosA;
+    cueBall.velocity.z = speed * sinA;
+
+    // Torque induced by offset hit:
+    // Follow (b > 0) creates forward rotation around axis perpendicular to line of shot
+    // Draw (b < 0) creates backspin
+    // English (a != 0) creates sidespin around vertical Y axis
+    const impulse = TABLE_CONSTANTS.BALL_MASS * speed;
+    const I = TABLE_CONSTANTS.MOMENT_OF_INERTIA;
+
+    // Angular velocity from strike
+    // Perpendicular vector to shot is (-sinA, 0, cosA)
+    const rollRate = (b * impulse) / I;
+    cueBall.angularVelocity.x = -sinA * rollRate;
+    cueBall.angularVelocity.z = cosA * rollRate;
+    cueBall.angularVelocity.y = -(a * impulse) / I; // English spin (vertical axis)
+
+    cueBall.state = 'sliding';
+    this.events = [];
+    return true;
+  }
+
+  /**
+   * Advance simulation by fixed dt
+   */
+  public step(dt: number = TABLE_CONSTANTS.FIXED_TIMESTEP): SimulationSnapshot {
+    this.simulationTime += dt;
+    this.events = [];
+
+    // 1. Update ball movement & friction dynamics
+    for (const ball of this.balls) {
+      if (ball.state === 'pocketed') continue;
+
+      if (ball.state === 'falling') {
+        this.updateFallingBall(ball, dt);
+        continue;
+      }
+
+      const prevX = ball.position.x;
+      const prevZ = ball.position.z;
+
+      this.updateBallDynamics(ball, dt);
+      this.checkPocketProximity(ball, prevX, prevZ);
+    }
+
+    // 2. Resolve Ball - Cushion collisions
+    this.resolveCushionCollisions();
+
+    // 3. Resolve Ball - Ball collisions
+    this.resolveBallCollisions();
+
+    // 4. Enforce boundary fail-safe (pocketing or clamping balls that escape cushion bounds)
+    for (const ball of this.balls) {
+      this.enforceTableBoundaries(ball);
+    }
+
+    return {
+      balls: this.balls,
+      isMoving: this.isMoving(),
+      events: [...this.events],
+    };
+  }
+
+  private updateBallDynamics(ball: BallPhysicsState, dt: number) {
+    const R = TABLE_CONSTANTS.BALL_RADIUS;
+    const g = TABLE_CONSTANTS.GRAVITY;
+    const mu_s = TABLE_CONSTANTS.SLIDING_FRICTION_COEFF;
+    const mu_r = TABLE_CONSTANTS.ROLLING_RESISTANCE_COEFF;
+
+    // Surface relative velocity at point of contact:
+    // v_contact = (vx - R * wz, vz + R * wx)
+    const vRelX = ball.velocity.x - R * ball.angularVelocity.z;
+    const vRelZ = ball.velocity.z + R * ball.angularVelocity.x;
+    const vRelSpeed = Math.hypot(vRelX, vRelZ);
+
+    // Maximum delta vRel that sliding friction can apply in dt without overshooting:
+    // dvRel/dt = a_linear + R * alpha_torque = mu_s * g + (5/2) * mu_s * g = 3.5 * mu_s * g
+    const maxDeltaVRel = 3.5 * mu_s * g * dt;
+
+    if (vRelSpeed > maxDeltaVRel) {
+      // Ball is SLIDING: cloth friction acts opposite to relative contact velocity
+      ball.state = 'sliding';
+      const uRelX = vRelX / vRelSpeed;
+      const uRelZ = vRelZ / vRelSpeed;
+
+      const aLinear = mu_s * g;
+      const alphaTorque = (2.5 * aLinear) / R;
+
+      ball.velocity.x -= uRelX * aLinear * dt;
+      ball.velocity.z -= uRelZ * aLinear * dt;
+
+      ball.angularVelocity.z += uRelX * alphaTorque * dt;
+      ball.angularVelocity.x -= uRelZ * alphaTorque * dt;
+    } else if (vRelSpeed > 0.0001) {
+      // Relative velocity reaches zero within this timestep -> exact transition to pure rolling
+      // dv_linear = -(2/7) * vRel, d(R * omega) = +(5/7) * vRel
+      ball.velocity.x -= (2 / 7) * vRelX;
+      ball.velocity.z -= (2 / 7) * vRelZ;
+      ball.angularVelocity.z = ball.velocity.x / R;
+      ball.angularVelocity.x = -ball.velocity.z / R;
+      ball.state = 'rolling';
+    }
+
+    // Rolling resistance deceleration
+    const speed = Math.hypot(ball.velocity.x, ball.velocity.z);
+    if (speed > TABLE_CONSTANTS.VELOCITY_EPSILON) {
+      const uX = ball.velocity.x / speed;
+      const uZ = ball.velocity.z / speed;
+      const aRoll = mu_r * g;
+
+      const newSpeed = Math.max(0, speed - aRoll * dt);
+      if (newSpeed <= TABLE_CONSTANTS.VELOCITY_EPSILON) {
+        ball.velocity.x = 0;
+        ball.velocity.z = 0;
+        ball.angularVelocity.x = 0;
+        ball.angularVelocity.z = 0;
+        ball.state = 'active';
+      } else {
+        ball.velocity.x = uX * newSpeed;
+        ball.velocity.z = uZ * newSpeed;
+
+        // In rolling state, synchronize rotation with rolling
+        ball.angularVelocity.x = -ball.velocity.z / R;
+        ball.angularVelocity.z = ball.velocity.x / R;
+        ball.state = 'rolling';
+      }
+    } else {
+      // Ball comes to a crisp, definitive stop
+      ball.velocity.x = 0;
+      ball.velocity.z = 0;
+      ball.angularVelocity.x = 0;
+      ball.angularVelocity.z = 0;
+      ball.state = 'active';
+    }
+
+    // Damp vertical spin (english)
+    if (Math.abs(ball.angularVelocity.y) > TABLE_CONSTANTS.ANGULAR_EPSILON) {
+      const spinDecel = TABLE_CONSTANTS.SPIN_DECELERATION_COEFF * dt;
+      if (Math.abs(ball.angularVelocity.y) <= spinDecel) {
+        ball.angularVelocity.y = 0;
+      } else {
+        ball.angularVelocity.y -= Math.sign(ball.angularVelocity.y) * spinDecel;
+      }
+    } else {
+      ball.angularVelocity.y = 0;
+    }
+
+    // Integrate position
+    ball.position.x += ball.velocity.x * dt;
+    ball.position.z += ball.velocity.z * dt;
+  }
+
+  private updateFallingBall(ball: BallPhysicsState, dt: number) {
+    ball.verticalVelocity -= TABLE_CONSTANTS.GRAVITY * 1.5 * dt;
+    ball.height += ball.verticalVelocity * dt;
+
+    // Continue drawing ball directly towards pocket center while falling
+    const pocket = POCKETS.find(p => p.id === ball.pocketedIn);
+    if (pocket) {
+      const dx = pocket.position.x - ball.position.x;
+      const dz = pocket.position.z - ball.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 0.002) {
+        ball.position.x += (dx / d) * 0.8 * dt;
+        ball.position.z += (dz / d) * 0.8 * dt;
+      }
+    } else {
+      ball.position.x += ball.velocity.x * dt * 0.2;
+      ball.position.z += ball.velocity.z * dt * 0.2;
+    }
+
+    // Fully pocketed threshold
+    if (ball.height < -TABLE_CONSTANTS.POCKET_DEPTH) {
+      ball.state = 'pocketed';
+      ball.velocity = { x: 0, z: 0 };
+      ball.verticalVelocity = 0;
+      ball.angularVelocity = { x: 0, y: 0, z: 0 };
+    }
+  }
+
+  private checkPocketProximity(ball: BallPhysicsState, prevX: number, prevZ: number) {
+    if (ball.state === 'pocketed' || ball.state === 'falling') return;
+
+    for (const pocket of POCKETS) {
+      // 1. Current position distance
+      const dx = ball.position.x - pocket.position.x;
+      const dz = ball.position.z - pocket.position.z;
+      const distCurrent = Math.hypot(dx, dz);
+
+      // 2. Continuous swept trajectory distance across the frame
+      const segX = ball.position.x - prevX;
+      const segZ = ball.position.z - prevZ;
+      const segLenSq = segX * segX + segZ * segZ;
+      let t = 0;
+      if (segLenSq > 0.000001) {
+        t = ((pocket.position.x - prevX) * segX + (pocket.position.z - prevZ) * segZ) / segLenSq;
+        t = Math.max(0, Math.min(1, t));
+      }
+      const closestX = prevX + t * segX;
+      const closestZ = prevZ + t * segZ;
+      const distSegment = Math.hypot(closestX - pocket.position.x, closestZ - pocket.position.z);
+
+      const captureRadius = pocket.captureRadius;
+
+      if (distCurrent < captureRadius || distSegment < captureRadius) {
+        ball.state = 'falling';
+        ball.pocketedIn = pocket.id;
+        ball.verticalVelocity = -1.2;
+
+        // Pull velocity toward pocket center
+        const pDist = Math.hypot(pocket.position.x - ball.position.x, pocket.position.z - ball.position.z);
+        if (pDist > 0.001) {
+          const attractSpeed = 0.8;
+          ball.velocity.x = ((pocket.position.x - ball.position.x) / pDist) * attractSpeed;
+          ball.velocity.z = ((pocket.position.z - ball.position.z) / pDist) * attractSpeed;
+        }
+
+        this.events.push({
+          type: 'ball_pocket',
+          ballA: ball.id,
+          pocketId: pocket.id,
+          impulse: Math.hypot(ball.velocity.x, ball.velocity.z),
+          timestamp: this.simulationTime,
+        });
+        break;
+      }
+    }
+  }
+
+  /**
+   * Absolute fail-safe containment:
+   * Keeps balls securely inside the table and pockets any ball that passes past the cushions.
+   */
+  private enforceTableBoundaries(ball: BallPhysicsState) {
+    if (ball.state === 'pocketed' || ball.state === 'falling') return;
+
+    const R = TABLE_CONSTANTS.BALL_RADIUS;
+    const minX = TABLE_CONSTANTS.PLAYFIELD_MIN_X;
+    const maxX = TABLE_CONSTANTS.PLAYFIELD_MAX_X;
+    const minZ = TABLE_CONSTANTS.PLAYFIELD_MIN_Z;
+    const maxZ = TABLE_CONSTANTS.PLAYFIELD_MAX_Z;
+
+    const threshold = 0.005;
+    const isOut =
+      ball.position.x < minX + R - threshold ||
+      ball.position.x > maxX - R + threshold ||
+      ball.position.z < minZ + R - threshold ||
+      ball.position.z > maxZ - R + threshold;
+
+    if (!isOut) return;
+
+    // Find closest pocket
+    let nearestPocket: typeof POCKETS[0] | null = null;
+    let nearestDist = 999;
+    for (const pocket of POCKETS) {
+      const d = Math.hypot(ball.position.x - pocket.position.x, ball.position.z - pocket.position.z);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestPocket = pocket;
+      }
+    }
+
+    // If near any pocket opening mouth, immediately pocket the ball!
+    if (nearestPocket && nearestDist < nearestPocket.captureRadius * 1.35) {
+      ball.state = 'falling';
+      ball.pocketedIn = nearestPocket.id;
+      ball.verticalVelocity = -1.2;
+      const dx = nearestPocket.position.x - ball.position.x;
+      const dz = nearestPocket.position.z - ball.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 0.001) {
+        ball.velocity.x = (dx / d) * 0.8;
+        ball.velocity.z = (dz / d) * 0.8;
+      }
+      this.events.push({
+        type: 'ball_pocket',
+        ballA: ball.id,
+        pocketId: nearestPocket.id,
+        impulse: Math.hypot(ball.velocity.x, ball.velocity.z),
+        timestamp: this.simulationTime,
+      });
+      return;
+    }
+
+    // Fail-safe bounce back inside playfield
+    if (ball.position.x < minX + R) {
+      ball.position.x = minX + R;
+      ball.velocity.x = Math.abs(ball.velocity.x) * TABLE_CONSTANTS.CUSHION_RESTITUTION;
+    } else if (ball.position.x > maxX - R) {
+      ball.position.x = maxX - R;
+      ball.velocity.x = -Math.abs(ball.velocity.x) * TABLE_CONSTANTS.CUSHION_RESTITUTION;
+    }
+
+    if (ball.position.z < minZ + R) {
+      ball.position.z = minZ + R;
+      ball.velocity.z = Math.abs(ball.velocity.z) * TABLE_CONSTANTS.CUSHION_RESTITUTION;
+    } else if (ball.position.z > maxZ - R) {
+      ball.position.z = maxZ - R;
+      ball.velocity.z = -Math.abs(ball.velocity.z) * TABLE_CONSTANTS.CUSHION_RESTITUTION;
+    }
+  }
+
+  private resolveCushionCollisions() {
+    const R = TABLE_CONSTANTS.BALL_RADIUS;
+    const restitution = TABLE_CONSTANTS.CUSHION_RESTITUTION;
+
+    for (const ball of this.balls) {
+      if (ball.state === 'pocketed' || ball.state === 'falling') continue;
+
+      for (const segment of CUSHION_SEGMENTS) {
+        // Line segment from start to end
+        const segX = segment.end.x - segment.start.x;
+        const segZ = segment.end.z - segment.start.z;
+        const segLenSq = segX * segX + segZ * segZ;
+
+        // Vector from segment start to ball
+        const bX = ball.position.x - segment.start.x;
+        const bZ = ball.position.z - segment.start.z;
+
+        // Projection factor t
+        let t = (bX * segX + bZ * segZ) / segLenSq;
+        t = Math.max(0, Math.min(1, t));
+
+        // Closest point on segment
+        const closestX = segment.start.x + t * segX;
+        const closestZ = segment.start.z + t * segZ;
+
+        const distX = ball.position.x - closestX;
+        const distZ = ball.position.z - closestZ;
+        const dist = Math.hypot(distX, distZ);
+
+        if (dist < R && dist > 0.0001) {
+          // Normal vector pointing from cushion to ball
+          const nx = distX / dist;
+          const nz = distZ / dist;
+
+          // Ensure normal matches segment inward normal
+          const dotNorm = nx * segment.normal.x + nz * segment.normal.z;
+          if (dotNorm < -0.2) continue; // ignore reverse collision
+
+          // Penetration depth
+          const penetration = R - dist;
+          ball.position.x += nx * penetration;
+          ball.position.z += nz * penetration;
+
+          // Normal relative velocity
+          const vDotN = ball.velocity.x * nx + ball.velocity.z * nz;
+          if (vDotN < 0) {
+            // Reflect velocity with restitution
+            const impulse = -(1 + restitution) * vDotN;
+            ball.velocity.x += impulse * nx;
+            ball.velocity.z += impulse * nz;
+
+            // Sidespin transfer to tangential velocity
+            // Tangent vector: (-nz, nx)
+            const tangentSpeed = -ball.velocity.x * nz + ball.velocity.z * nx;
+            const spinEffect = ball.angularVelocity.y * R * TABLE_CONSTANTS.CUSHION_FRICTION;
+            ball.velocity.x += -nz * spinEffect;
+            ball.velocity.z += nx * spinEffect;
+            ball.angularVelocity.y *= 0.6; // cushion damps sidespin
+
+            this.events.push({
+              type: 'ball_cushion',
+              ballA: ball.id,
+              cushionId: segment.id,
+              impulse: Math.abs(vDotN),
+              timestamp: this.simulationTime,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  private resolveBallCollisions() {
+    const R = TABLE_CONSTANTS.BALL_RADIUS;
+    const minDistance = 2 * R;
+    const minDistanceSq = minDistance * minDistance;
+    const restitution = TABLE_CONSTANTS.BALL_RESTITUTION;
+
+    const n = this.balls.length;
+    // Multi-pass collision solver (2 passes): allows impulse to propagate cleanly through tight 15-ball clusters on break shots
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < n; i++) {
+        const b1 = this.balls[i];
+        if (b1.state === 'pocketed' || b1.state === 'falling') continue;
+
+        for (let j = i + 1; j < n; j++) {
+          const b2 = this.balls[j];
+          if (b2.state === 'pocketed' || b2.state === 'falling') continue;
+
+          const dx = b2.position.x - b1.position.x;
+          const dz = b2.position.z - b1.position.z;
+          const distSq = dx * dx + dz * dz;
+
+          if (distSq < minDistanceSq && distSq > 0.000001) {
+            const dist = Math.sqrt(distSq);
+            const nx = dx / dist;
+            const nz = dz / dist;
+
+            // Separate overlapping spheres equally
+            const overlap = 0.5 * (minDistance - dist);
+            b1.position.x -= nx * overlap;
+            b1.position.z -= nz * overlap;
+            b2.position.x += nx * overlap;
+            b2.position.z += nz * overlap;
+
+            // Relative velocity along collision normal
+            const dvx = b2.velocity.x - b1.velocity.x;
+            const dvz = b2.velocity.z - b1.velocity.z;
+            const vRelNormal = dvx * nx + dvz * nz;
+
+            // Balls moving towards each other
+            if (vRelNormal < 0) {
+              const impulseMagnitude = -(1 + restitution) * vRelNormal * 0.5; // equal masses
+
+              b1.velocity.x -= impulseMagnitude * nx;
+              b1.velocity.z -= impulseMagnitude * nz;
+              b2.velocity.x += impulseMagnitude * nx;
+              b2.velocity.z += impulseMagnitude * nz;
+
+              // Partial spin transfer along contact plane
+              const avgSpinY = (b1.angularVelocity.y + b2.angularVelocity.y) * 0.5;
+              b1.angularVelocity.y = avgSpinY;
+              b2.angularVelocity.y = -avgSpinY * 0.3;
+
+              if (pass === 0) {
+                this.events.push({
+                  type: 'ball_ball',
+                  ballA: b1.id,
+                  ballB: b2.id,
+                  impulse: Math.abs(vRelNormal),
+                  timestamp: this.simulationTime,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Fast-forward simulation until all balls stop moving or max steps reached
+   */
+  public simulateUntilRest(maxSteps: number = 3000): SimulationSnapshot {
+    let steps = 0;
+    const accumulatedEvents: CollisionEvent[] = [];
+
+    while (this.isMoving() && steps < maxSteps) {
+      const snap = this.step(TABLE_CONSTANTS.FIXED_TIMESTEP);
+      if (snap.events.length > 0) {
+        accumulatedEvents.push(...snap.events);
+      }
+      steps++;
+    }
+
+    return {
+      balls: this.balls,
+      isMoving: this.isMoving(),
+      events: accumulatedEvents,
+    };
+  }
+}
