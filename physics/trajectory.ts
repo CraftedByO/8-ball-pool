@@ -1,4 +1,4 @@
-import { TABLE_CONSTANTS, CUSHION_SEGMENTS, Vector2D } from './constants';
+import { TABLE_CONSTANTS, CUSHION_SEGMENTS, POCKETS, Vector2D } from './constants';
 import { BallPhysicsState } from './types';
 
 export interface TrajectoryPoint {
@@ -9,11 +9,16 @@ export interface TrajectoryPoint {
   targetBallId?: number;
   targetBallStart?: Vector2D;
   targetBallDir?: Vector2D;
+  targetBallEnd?: Vector2D;
+  targetBallWillPocket?: boolean;
+  targetPocketId?: string;
+  cueWillPocket?: boolean;
   hitCushion?: boolean;
 }
 
 /**
- * Predicts the initial cue-ball trajectory ray and first collision (ball or cushion)
+ * Predicts the cue-ball trajectory ray, first collision, target ball deflection path,
+ * and pocket targeting with high mathematical fidelity.
  */
 export function calculateAimTrajectory(
   cueBall: BallPhysicsState,
@@ -30,6 +35,7 @@ export function calculateAimTrajectory(
   let closestDist = 999.0;
   let targetBall: BallPhysicsState | null = null;
   let hitCushion = false;
+  let cueWillPocket = false;
   let cushionNormal: Vector2D | null = null;
 
   // 1. Raycast against all object balls
@@ -55,6 +61,7 @@ export function calculateAimTrajectory(
         closestDist = d;
         targetBall = b;
         hitCushion = false;
+        cueWillPocket = false;
       }
     }
   }
@@ -93,9 +100,34 @@ export function calculateAimTrajectory(
         closestDist = s;
         targetBall = null;
         hitCushion = true;
+        cueWillPocket = false;
         cushionNormal = { x: nx, z: nz };
       }
     }
+  }
+
+  // 3. Raycast cue ball against pockets to catch direct pocket scratches or aimed pots
+  for (const pocket of POCKETS) {
+    const pox = pocket.position.x - startX;
+    const poz = pocket.position.z - startZ;
+    const proj = pox * rayDirX + poz * rayDirZ;
+    if (proj > 0) {
+      const perpSq = (pox * pox + poz * poz) - (proj * proj);
+      if (perpSq < pocket.captureRadius * pocket.captureRadius) {
+        if (proj < closestDist) {
+          closestDist = proj;
+          targetBall = null;
+          hitCushion = false;
+          cueWillPocket = true;
+        }
+      }
+    }
+  }
+
+  // Clamp ray length to table bounds (prevents 1000m line glitch when aiming at gaps)
+  const maxTableDist = 2.6;
+  if (closestDist > maxTableDist) {
+    closestDist = maxTableDist;
   }
 
   // Calculate contact center point
@@ -114,6 +146,7 @@ export function calculateAimTrajectory(
     cueStart: visibleStart,
     cueHitPoint: hitPoint,
     hitCushion,
+    cueWillPocket,
   };
 
   if (targetBall) {
@@ -143,6 +176,89 @@ export function calculateAimTrajectory(
           z: cueReflectZ / cueReflectLen,
         };
       }
+
+      // --- Project Full Target Ball Trajectory Path ---
+      const tbStartX = targetBall.position.x;
+      const tbStartZ = targetBall.position.z;
+      let tbClosest = maxTableDist;
+      let targetBallWillPocket = false;
+      let targetPocketId: string | undefined = undefined;
+
+      // A. Check collision with pockets along targetBallDir
+      for (const pocket of POCKETS) {
+        const pox = pocket.position.x - tbStartX;
+        const poz = pocket.position.z - tbStartZ;
+        const proj = pox * dirX + poz * dirZ;
+        if (proj > 0.01) {
+          const perpSq = (pox * pox + poz * poz) - (proj * proj);
+          if (perpSq < pocket.captureRadius * pocket.captureRadius) {
+            if (proj < tbClosest) {
+              tbClosest = proj;
+              targetBallWillPocket = true;
+              targetPocketId = pocket.id;
+            }
+          }
+        }
+      }
+
+      // B. Check collision with other obstacle balls along targetBallDir
+      for (const other of allBalls) {
+        if (
+          other.id === 0 ||
+          other.id === targetBall.id ||
+          other.state === 'pocketed' ||
+          other.state === 'falling'
+        ) {
+          continue;
+        }
+
+        const ox = other.position.x - tbStartX;
+        const oz = other.position.z - tbStartZ;
+        const proj = ox * dirX + oz * dirZ;
+        if (proj <= 0) continue;
+
+        const perpDistSq = (ox * ox + oz * oz) - (proj * proj);
+        const colThresh = 2 * R;
+        if (perpDistSq < colThresh * colThresh) {
+          const d = proj - Math.sqrt(colThresh * colThresh - perpDistSq);
+          if (d > 0.01 && d < tbClosest) {
+            tbClosest = d;
+            targetBallWillPocket = false;
+            targetPocketId = undefined;
+          }
+        }
+      }
+
+      // C. Check collision with cushions along targetBallDir
+      for (const cushion of CUSHION_SEGMENTS) {
+        const cnx = cushion.normal.x;
+        const cnz = cushion.normal.z;
+        const dirDotN = dirX * cnx + dirZ * cnz;
+        if (dirDotN >= -0.0001) continue;
+
+        const distP = (tbStartX - cushion.start.x) * cnx + (tbStartZ - cushion.start.z) * cnz;
+        const s = (R - distP) / dirDotN;
+        if (s > 0.01 && s < tbClosest) {
+          const impactX = tbStartX + dirX * s;
+          const impactZ = tbStartZ + dirZ * s;
+          const segDx = cushion.end.x - cushion.start.x;
+          const segDz = cushion.end.z - cushion.start.z;
+          const segLenSq = segDx * segDx + segDz * segDz;
+          const u = ((impactX - cushion.start.x) * segDx + (impactZ - cushion.start.z) * segDz) / segLenSq;
+          if (u >= -0.05 && u <= 1.05) {
+            tbClosest = s;
+            targetBallWillPocket = false;
+            targetPocketId = undefined;
+          }
+        }
+      }
+
+      result.targetBallEnd = {
+        x: tbStartX + dirX * tbClosest,
+        z: tbStartZ + dirZ * tbClosest,
+      };
+      result.targetBallWillPocket = targetBallWillPocket;
+      result.targetPocketId = targetPocketId;
     }
   } else if (hitCushion && cushionNormal) {
     // Reflect cue ball off cushion

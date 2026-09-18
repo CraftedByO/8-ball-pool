@@ -22,7 +22,7 @@ import { NavigationHeader } from '../../components/NavigationHeader';
 import { initAnonymousAuth, getPlayerProfile } from '../../firebase/auth';
 import { PlayerProfile } from '../../leaderboard/types';
 import { TABLE_CONSTANTS } from '../../physics/constants';
-import { CollisionEvent } from '../../physics/types';
+import { CollisionEvent, BallPhysicsState } from '../../physics/types';
 import { RulesState } from '../../rules/types';
 import { Check, Move } from 'lucide-react';
 
@@ -425,6 +425,7 @@ export default function SinglePlayerGame() {
   // Mouse & Touch Drag Aiming / Ball-in-Hand Controls
   const isPointerAiming = useRef(false);
   const lastPointerX = useRef(0);
+  const pointerDownPos = useRef({ x: 0, y: 0 });
 
   const handlePointerDown = (e: React.PointerEvent) => {
     const isBallInHandActive = rulesState.isBallInHand && rulesState.currentTurn === 'player1';
@@ -437,6 +438,20 @@ export default function SinglePlayerGame() {
     if ((e.target as HTMLElement).tagName === 'CANVAS') {
       isPointerAiming.current = true;
       lastPointerX.current = e.clientX;
+      pointerDownPos.current = { x: e.clientX, y: e.clientY };
+
+      // In overhead view, clicking anywhere directly aims along the ray from cue ball to cursor
+      if (cameraMode === 'overhead' && rendererRef.current && physicsRef.current) {
+        const pt = rendererRef.current.getTableIntersection(e.clientX, e.clientY);
+        const cue = physicsRef.current.getCueBall();
+        if (pt && cue) {
+          const dx = pt.x - cue.position.x;
+          const dz = pt.z - cue.position.z;
+          if (Math.hypot(dx, dz) > 0.05) {
+            updateAimAngle(Math.atan2(dz, dx));
+          }
+        }
+      }
     }
   };
 
@@ -450,15 +465,56 @@ export default function SinglePlayerGame() {
     }
 
     if (!isPointerAiming.current) return;
+
+    // Overhead dragging: direct raycast aim
+    if (cameraMode === 'overhead' && rendererRef.current && physicsRef.current) {
+      const pt = rendererRef.current.getTableIntersection(e.clientX, e.clientY);
+      const cue = physicsRef.current.getCueBall();
+      if (pt && cue) {
+        const dx = pt.x - cue.position.x;
+        const dz = pt.z - cue.position.z;
+        if (Math.hypot(dx, dz) > 0.05) {
+          updateAimAngle(Math.atan2(dz, dx));
+        }
+      }
+      return;
+    }
+
+    // Perspective mode: smooth high-precision drag (0.0024 rad/px)
     const deltaX = e.clientX - lastPointerX.current;
     lastPointerX.current = e.clientX;
-    const sensitivity = 0.005;
+    const sensitivity = 0.0024;
     updateAimAngle(prev => prev + deltaX * sensitivity);
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
     isDraggingCueBallRef.current = false;
     isPointerAiming.current = false;
+
+    // Tap-to-aim: if tapped on/near an object ball without dragging, snap aim toward it
+    const dragDist = Math.hypot(e.clientX - pointerDownPos.current.x, e.clientY - pointerDownPos.current.y);
+    if (dragDist < 6 && rendererRef.current && physicsRef.current) {
+      const pt = rendererRef.current.getTableIntersection(e.clientX, e.clientY);
+      const cue = physicsRef.current.getCueBall();
+      if (pt && cue) {
+        const balls = physicsRef.current.getBalls();
+        let closestBall: BallPhysicsState | null = null;
+        let minDist = 0.09; // within 9cm of ball center
+        for (const b of balls) {
+          if (b.id === 0 || b.state === 'pocketed' || b.state === 'falling') continue;
+          const d = Math.hypot(b.position.x - pt.x, b.position.z - pt.z);
+          if (d < minDist) {
+            minDist = d;
+            closestBall = b;
+          }
+        }
+        if (closestBall) {
+          const dx = closestBall.position.x - cue.position.x;
+          const dz = closestBall.position.z - cue.position.z;
+          updateAimAngle(Math.atan2(dz, dx));
+        }
+      }
+    }
   };
 
   // Keyboard controls & Mouse wheel power
@@ -486,10 +542,12 @@ export default function SinglePlayerGame() {
         updatePower(p => Math.max(0.05, +(p - 0.05).toFixed(2)));
       } else if (e.code === 'ArrowLeft' || e.code === 'KeyA') {
         e.preventDefault();
-        updateAimAngle(a => a - 0.02);
+        const step = e.shiftKey ? 0.02 : 0.004; // Micro-step 0.23° for pinpoint pocket alignment
+        updateAimAngle(a => a - step);
       } else if (e.code === 'ArrowRight' || e.code === 'KeyD') {
         e.preventDefault();
-        updateAimAngle(a => a + 0.02);
+        const step = e.shiftKey ? 0.02 : 0.004;
+        updateAimAngle(a => a + step);
       }
     };
 
@@ -662,17 +720,19 @@ export default function SinglePlayerGame() {
 
           <div className="pointer-events-auto flex items-center space-x-2 bg-neutral-900/85 backdrop-blur-md border border-neutral-800 px-4 py-2 rounded-2xl shadow-2xl">
             <button
-              onClick={() => updateAimAngle(a => a - 0.02)}
-              className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white font-bold text-xs"
+              onClick={() => updateAimAngle(a => a - 0.0035)}
+              className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-600 text-white font-bold text-xs transition"
+              title="Micro-step left (0.2°)"
             >
               ◀ Fine
             </button>
-            <span className="text-xs text-neutral-300 font-mono">
-              {Math.round(((aimAngle * 180) / Math.PI) % 360)}°
+            <span className="text-xs text-neutral-300 font-mono w-14 text-center">
+              {((((aimAngle * 180) / Math.PI) % 360 + 360) % 360).toFixed(1)}°
             </span>
             <button
-              onClick={() => updateAimAngle(a => a + 0.02)}
-              className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white font-bold text-xs"
+              onClick={() => updateAimAngle(a => a + 0.0035)}
+              className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-600 text-white font-bold text-xs transition"
+              title="Micro-step right (0.2°)"
             >
               Fine ▶
             </button>

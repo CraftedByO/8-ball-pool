@@ -101,37 +101,44 @@ export class BilliardsPhysicsEngine {
   }
 
   /**
-   * Advance simulation by fixed dt
+   * Advance simulation by fixed dt using 8x sub-stepping and Continuous Collision Detection (CCD)
    */
   public step(dt: number = TABLE_CONSTANTS.FIXED_TIMESTEP): SimulationSnapshot {
-    this.simulationTime += dt;
+    const SUBSTEPS = 8;
+    const subDt = dt / SUBSTEPS;
     this.events = [];
 
-    // 1. Update ball movement & friction dynamics
-    for (const ball of this.balls) {
-      if (ball.state === 'pocketed') continue;
+    for (let sub = 0; sub < SUBSTEPS; sub++) {
+      this.simulationTime += subDt;
 
-      if (ball.state === 'falling') {
-        this.updateFallingBall(ball, dt);
-        continue;
+      // Track previous positions for continuous swept collision detection
+      const prevPositions = new Map<number, { x: number; z: number }>();
+      for (const ball of this.balls) {
+        if (ball.state === 'pocketed') continue;
+        prevPositions.set(ball.id, { x: ball.position.x, z: ball.position.z });
+
+        if (ball.state === 'falling') {
+          this.updateFallingBall(ball, subDt);
+          continue;
+        }
+
+        const prevX = ball.position.x;
+        const prevZ = ball.position.z;
+
+        this.updateBallDynamics(ball, subDt);
+        this.checkPocketProximity(ball, prevX, prevZ);
       }
 
-      const prevX = ball.position.x;
-      const prevZ = ball.position.z;
+      // Resolve Ball - Cushion collisions
+      this.resolveCushionCollisions();
 
-      this.updateBallDynamics(ball, dt);
-      this.checkPocketProximity(ball, prevX, prevZ);
-    }
+      // Resolve Ball - Ball collisions with swept sphere TOI
+      this.resolveBallCollisions(prevPositions, subDt);
 
-    // 2. Resolve Ball - Cushion collisions
-    this.resolveCushionCollisions();
-
-    // 3. Resolve Ball - Ball collisions
-    this.resolveBallCollisions();
-
-    // 4. Enforce boundary fail-safe (pocketing or clamping balls that escape cushion bounds)
-    for (const ball of this.balls) {
-      this.enforceTableBoundaries(ball);
+      // Enforce boundary fail-safe
+      for (const ball of this.balls) {
+        this.enforceTableBoundaries(ball);
+      }
     }
 
     return {
@@ -451,14 +458,17 @@ export class BilliardsPhysicsEngine {
     }
   }
 
-  private resolveBallCollisions() {
+  private resolveBallCollisions(
+    prevPositions: Map<number, { x: number; z: number }>,
+    subDt: number
+  ) {
     const R = TABLE_CONSTANTS.BALL_RADIUS;
     const minDistance = 2 * R;
     const minDistanceSq = minDistance * minDistance;
     const restitution = TABLE_CONSTANTS.BALL_RESTITUTION;
 
     const n = this.balls.length;
-    // Multi-pass collision solver (2 passes): allows impulse to propagate cleanly through tight 15-ball clusters on break shots
+    // Multi-pass collision solver allows impulse to propagate cleanly through tight 15-ball clusters
     for (let pass = 0; pass < 2; pass++) {
       for (let i = 0; i < n; i++) {
         const b1 = this.balls[i];
@@ -468,30 +478,87 @@ export class BilliardsPhysicsEngine {
           const b2 = this.balls[j];
           if (b2.state === 'pocketed' || b2.state === 'falling') continue;
 
-          const dx = b2.position.x - b1.position.x;
-          const dz = b2.position.z - b1.position.z;
-          const distSq = dx * dx + dz * dz;
+          const p1Prev = prevPositions.get(b1.id) || b1.position;
+          const p2Prev = prevPositions.get(b2.id) || b2.position;
 
-          if (distSq < minDistanceSq && distSq > 0.000001) {
-            const dist = Math.sqrt(distSq);
-            const nx = dx / dist;
-            const nz = dz / dist;
+          // Relative position and velocity across subDt
+          const p0x = p1Prev.x - p2Prev.x;
+          const p0z = p1Prev.z - p2Prev.z;
+          const dvx = b1.velocity.x - b2.velocity.x;
+          const dvz = b1.velocity.z - b2.velocity.z;
+          const vSq = dvx * dvx + dvz * dvz;
+
+          // Current distance squared
+          const curDx = b2.position.x - b1.position.x;
+          const curDz = b2.position.z - b1.position.z;
+          const curDistSq = curDx * curDx + curDz * curDz;
+
+          let collided = false;
+          let nx = 0;
+          let nz = 0;
+          let toi = 0;
+          let hit1X = b1.position.x;
+          let hit1Z = b1.position.z;
+          let hit2X = b2.position.x;
+          let hit2Z = b2.position.z;
+
+          // 1. Check Continuous Swept Sphere collision if balls were moving relative to each other
+          if (pass === 0 && vSq > 0.0001) {
+            const A = vSq;
+            const B = 2 * (p0x * dvx + p0z * dvz);
+            const C = (p0x * p0x + p0z * p0z) - minDistanceSq;
+
+            // If balls were not already deeply overlapping at start of subDt
+            if (C >= -0.000001) {
+              const disc = B * B - 4 * A * C;
+              if (disc >= 0) {
+                const t = (-B - Math.sqrt(disc)) / (2 * A);
+                if (t >= -0.00001 && t <= subDt) {
+                  collided = true;
+                  toi = Math.max(0, Math.min(subDt, t));
+
+                  // Exact contact coordinates at time of impact
+                  hit1X = p1Prev.x + b1.velocity.x * toi;
+                  hit1Z = p1Prev.z + b1.velocity.z * toi;
+                  hit2X = p2Prev.x + b2.velocity.x * toi;
+                  hit2Z = p2Prev.z + b2.velocity.z * toi;
+
+                  // Exact normal vector pointing from b1 to b2 at impact instant
+                  const hx = hit2X - hit1X;
+                  const hz = hit2Z - hit1Z;
+                  const hDist = Math.hypot(hx, hz);
+                  if (hDist > 0.0001) {
+                    nx = hx / hDist;
+                    nz = hz / hDist;
+                  }
+                }
+              }
+            }
+          }
+
+          // 2. Discrete fallback for resting/overlapping spheres or subsequent solver passes
+          if (!collided && curDistSq < minDistanceSq && curDistSq > 0.000001) {
+            collided = true;
+            toi = 0;
+            const curDist = Math.sqrt(curDistSq);
+            nx = curDx / curDist;
+            nz = curDz / curDist;
 
             // Separate overlapping spheres equally
-            const overlap = 0.5 * (minDistance - dist);
+            const overlap = 0.5 * (minDistance - curDist);
             b1.position.x -= nx * overlap;
             b1.position.z -= nz * overlap;
             b2.position.x += nx * overlap;
             b2.position.z += nz * overlap;
+          }
 
-            // Relative velocity along collision normal
-            const dvx = b2.velocity.x - b1.velocity.x;
-            const dvz = b2.velocity.z - b1.velocity.z;
-            const vRelNormal = dvx * nx + dvz * nz;
+          if (collided && (nx !== 0 || nz !== 0)) {
+            // Relative velocity along collision normal (b2 rel to b1)
+            const relVn = (b2.velocity.x - b1.velocity.x) * nx + (b2.velocity.z - b1.velocity.z) * nz;
 
-            // Balls moving towards each other
-            if (vRelNormal < 0) {
-              const impulseMagnitude = -(1 + restitution) * vRelNormal * 0.5; // equal masses
+            // Moving towards each other
+            if (relVn < 0) {
+              const impulseMagnitude = -(1 + restitution) * relVn * 0.5;
 
               b1.velocity.x -= impulseMagnitude * nx;
               b1.velocity.z -= impulseMagnitude * nz;
@@ -503,12 +570,24 @@ export class BilliardsPhysicsEngine {
               b1.angularVelocity.y = avgSpinY;
               b2.angularVelocity.y = -avgSpinY * 0.3;
 
+              // For swept collisions, integrate remaining time from contact position
+              if (toi > 0) {
+                const remT = subDt - toi;
+                b1.position.x = hit1X + b1.velocity.x * remT;
+                b1.position.z = hit1Z + b1.velocity.z * remT;
+                b2.position.x = hit2X + b2.velocity.x * remT;
+                b2.position.z = hit2Z + b2.velocity.z * remT;
+
+                prevPositions.set(b1.id, { x: hit1X, z: hit1Z });
+                prevPositions.set(b2.id, { x: hit2X, z: hit2Z });
+              }
+
               if (pass === 0) {
                 this.events.push({
                   type: 'ball_ball',
                   ballA: b1.id,
                   ballB: b2.id,
-                  impulse: Math.abs(vRelNormal),
+                  impulse: Math.abs(relVn),
                   timestamp: this.simulationTime,
                 });
               }

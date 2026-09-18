@@ -1161,13 +1161,13 @@ export class PoolGameRenderer {
     this.cueReflectLine = new THREE.Line(reflectLineGeo, reflectLineMat);
     this.scene.add(this.cueReflectLine);
 
-    // 4. Ghost ball sleek contact indicator (outer luminous ring + inner translucent disc)
+    // 4. Ghost ball sleek contact indicator (outer luminous ring + inner translucent disc + 3D holographic volume sphere)
     const ghostGroup = new THREE.Group();
     this.ghostBallGroup = ghostGroup;
     const R = TABLE_CONSTANTS.BALL_RADIUS;
 
-    // Table footprint outer ring
-    const ringGeo = new THREE.RingGeometry(R * 0.88, R, 32);
+    // Table footprint outer ring on felt
+    const ringGeo = new THREE.RingGeometry(R * 0.90, R, 32);
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
@@ -1192,8 +1192,40 @@ export class PoolGameRenderer {
     discMesh.position.y = 0.0024;
     ghostGroup.add(discMesh);
 
+    // 3D Holographic Cue Ball Sphere (eliminates perspective parallax against 3D spherical balls)
+    const sphereGeo = new THREE.SphereGeometry(R, 32, 24);
+    const sphereMat = new THREE.MeshPhysicalMaterial({
+      color: 0xe0f2fe,
+      transmission: 0.70,
+      opacity: 0.50,
+      transparent: true,
+      roughness: 0.15,
+      metalness: 0.05,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.1,
+      ior: 1.45,
+      depthWrite: false,
+    });
+    const sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
+    sphereMesh.position.y = R;
+    ghostGroup.add(sphereMesh);
+
+    // 3D Equator latitude ring at ball center height
+    const equatorGeo = new THREE.RingGeometry(R * 0.97, R * 1.01, 32);
+    const equatorMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.75,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const equatorMesh = new THREE.Mesh(equatorGeo, equatorMat);
+    equatorMesh.rotation.x = -Math.PI / 2;
+    equatorMesh.position.y = R;
+    ghostGroup.add(equatorMesh);
+
     // Impact center point
-    const centerGeo = new THREE.CircleGeometry(0.0035, 16);
+    const centerGeo = new THREE.CircleGeometry(0.004, 16);
     const centerMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       side: THREE.DoubleSide,
@@ -1452,9 +1484,16 @@ export class PoolGameRenderer {
       ];
       this.trajectoryLine.geometry.setFromPoints(points);
       this.trajectoryLine.computeLineDistances();
+
+      const cueMat = this.trajectoryLine.material as THREE.LineDashedMaterial;
+      if (traj.cueWillPocket) {
+        cueMat.color.setHex(0xf43f5e); // Soft warning rose red if cue ball is heading directly into pocket
+      } else {
+        cueMat.color.setHex(0xffffff); // Laser white
+      }
     }
 
-    // 2. Ghost ball indicator at point of impact
+    // 2. 3D Ghost ball indicator at point of impact
     if (this.ghostBallGroup && traj.targetBallId !== undefined) {
       this.ghostBallGroup.visible = true;
       this.ghostBallGroup.position.set(traj.cueHitPoint.x, 0, traj.cueHitPoint.z);
@@ -1462,20 +1501,29 @@ export class PoolGameRenderer {
       this.ghostBallGroup.visible = false;
     }
 
-    // 3. Target ball deflected path (luminous electric cyan)
-    if (this.targetBallLine && traj.targetBallStart && traj.targetBallDir) {
+    // 3. Full-length target ball deflected path (emerald green when pocket-bound, electric cyan otherwise)
+    if (this.targetBallLine && traj.targetBallStart && (traj.targetBallEnd || traj.targetBallDir)) {
       this.targetBallLine.visible = true;
-      const targetLen = 0.50;
+      const endX = traj.targetBallEnd ? traj.targetBallEnd.x : traj.targetBallStart.x + traj.targetBallDir!.x * 0.8;
+      const endZ = traj.targetBallEnd ? traj.targetBallEnd.z : traj.targetBallStart.z + traj.targetBallDir!.z * 0.8;
+
       const points = [
         new THREE.Vector3(traj.targetBallStart.x, yGuideline, traj.targetBallStart.z),
-        new THREE.Vector3(
-          traj.targetBallStart.x + traj.targetBallDir.x * targetLen,
-          yGuideline,
-          traj.targetBallStart.z + traj.targetBallDir.z * targetLen
-        ),
+        new THREE.Vector3(endX, yGuideline, endZ),
       ];
       this.targetBallLine.geometry.setFromPoints(points);
       this.targetBallLine.computeLineDistances();
+
+      const targetMat = this.targetBallLine.material as THREE.LineDashedMaterial;
+      if (traj.targetBallWillPocket) {
+        targetMat.color.setHex(0x10b981); // Radiant emerald green on pocket target!
+        targetMat.dashSize = 0.035;
+        targetMat.gapSize = 0.015;
+      } else {
+        targetMat.color.setHex(0x00f0ff); // Electric cyan towards cushion or obstacle
+        targetMat.dashSize = 0.030;
+        targetMat.gapSize = 0.020;
+      }
     } else if (this.targetBallLine) {
       this.targetBallLine.visible = false;
     }
@@ -1484,7 +1532,7 @@ export class PoolGameRenderer {
     const reflectDir = traj.cueReflectDir || traj.cushionReflectDir;
     if (this.cueReflectLine && reflectDir) {
       this.cueReflectLine.visible = true;
-      const reflectLen = 0.35;
+      const reflectLen = 0.40;
       const points = [
         new THREE.Vector3(traj.cueHitPoint.x, yGuideline, traj.cueHitPoint.z),
         new THREE.Vector3(

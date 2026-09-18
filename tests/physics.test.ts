@@ -3,6 +3,7 @@ import { BilliardsPhysicsEngine } from '../physics/engine';
 import { TABLE_CONSTANTS, CUSHION_SEGMENTS } from '../physics/constants';
 import { BallPhysicsState } from '../physics/types';
 import { createStandard8BallRack } from '../physics/setup';
+import { calculateAimTrajectory } from '../physics/trajectory';
 
 describe('BilliardsPhysicsEngine', () => {
   it('should decelerate rolling balls due to cloth friction', () => {
@@ -297,5 +298,58 @@ describe('BilliardsPhysicsEngine', () => {
 
     // A powerful break should scatter at least 10+ balls across the table
     expect(scatteredCount).toBeGreaterThanOrEqual(10);
+  });
+
+  it('accurately matches trajectory aim prediction on cut shots with minimal angular error', () => {
+    const cueBall: BallPhysicsState = {
+      id: 0,
+      type: 'cue',
+      position: { x: -0.5, z: 0 },
+      height: 0,
+      velocity: { x: 0, z: 0 },
+      verticalVelocity: 0,
+      angularVelocity: { x: 0, y: 0, z: 0 },
+      state: 'active',
+    };
+
+    const targetBall: BallPhysicsState = {
+      id: 1,
+      type: 'solid',
+      position: { x: 0, z: 0.02 }, // cut shot offset
+      height: 0,
+      velocity: { x: 0, z: 0 },
+      verticalVelocity: 0,
+      angularVelocity: { x: 0, y: 0, z: 0 },
+      state: 'active',
+    };
+
+    const aimAngle = 0;
+    const traj = calculateAimTrajectory(cueBall, aimAngle, [cueBall, targetBall]);
+    expect(traj.targetBallDir).toBeDefined();
+    const predictedAngle = Math.atan2(traj.targetBallDir!.z, traj.targetBallDir!.x);
+
+    // Test across medium to full power
+    for (const power of [0.3, 0.6, 0.9]) {
+      const engine = new BilliardsPhysicsEngine([
+        JSON.parse(JSON.stringify(cueBall)),
+        JSON.parse(JSON.stringify(targetBall)),
+      ]);
+      engine.strikeCueBall({ power, angle: aimAngle, spinX: 0, spinY: 0 });
+
+      let collided = false;
+      for (let s = 0; s < 200; s++) {
+        const snap = engine.step(TABLE_CONSTANTS.FIXED_TIMESTEP);
+        if (snap.events.some(e => e.type === 'ball_ball')) {
+          collided = true;
+          const tBall = snap.balls.find(b => b.id === 1)!;
+          const actualAngle = Math.atan2(tBall.velocity.z, tBall.velocity.x);
+          const angularErrorDeg = Math.abs(actualAngle - predictedAngle) * (180 / Math.PI);
+          // Continuous swept TOI ensures angular error is virtually zero (< 0.25 deg)
+          expect(angularErrorDeg).toBeLessThan(0.25);
+          break;
+        }
+      }
+      expect(collided).toBe(true);
+    }
   });
 });
