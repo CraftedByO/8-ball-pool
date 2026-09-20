@@ -460,10 +460,47 @@ function OnlineMultiplayerContent() {
     const cueBall = physicsRef.current.getCueBall();
     if (!cueBall) return;
 
-    await MultiplayerService.updateCueBallPlacement(match.id, {
-      x: cueBall.position.x,
-      z: cueBall.position.z,
+    // 1. Immediately reset cue ball physics velocity & active state
+    cueBall.state = 'active';
+    cueBall.velocity = { x: 0, z: 0 };
+    cueBall.angularVelocity = { x: 0, y: 0, z: 0 };
+    cueBall.height = 0;
+
+    // 2. Clear ball in hand in rules engine
+    if (rulesRef.current) {
+      rulesRef.current.clearBallInHand();
+    }
+
+    // 3. Update React match state immediately so UI transitions to shooting mode
+    setMatch(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        rulesState: {
+          ...prev.rulesState,
+          isBallInHand: false,
+          status: prev.rulesState.status === 'game_over' ? 'game_over' : 'in_turn',
+        },
+        balls: physicsRef.current ? physicsRef.current.getBalls() : prev.balls,
+      };
     });
+
+    // 4. Update 3D renderer and play cue ball placement audio
+    if (rendererRef.current) {
+      rendererRef.current.updateBallInHandGuide(false);
+      rendererRef.current.updateBalls(physicsRef.current.getBalls());
+    }
+    soundFX.playCushionHit(0.25);
+
+    // 5. Persist to Firestore to notify opponent and update server match document
+    try {
+      await MultiplayerService.confirmCueBallPlacement(match.id, {
+        x: cueBall.position.x,
+        z: cueBall.position.z,
+      });
+    } catch (err) {
+      console.error('Failed to confirm placement in Firestore:', err);
+    }
   };
 
   // 8. Surrender/Forfeit Match

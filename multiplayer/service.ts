@@ -12,8 +12,9 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { MatchDocument, MatchPlayer } from './types';
-import { createStandard8BallRack } from '../physics/setup';
+import { createStandard8BallRack, findClearCueBallSpot } from '../physics/setup';
 import { EightBallRulesEngine } from '../rules/engine';
+import { RulesState } from '../rules/types';
 import { ShotParameters } from '../physics/types';
 import { BilliardsPhysicsEngine } from '../physics/engine';
 import { calculateEloDelta } from '../leaderboard/elo';
@@ -176,8 +177,14 @@ export class MultiplayerService {
       const cueBall = finalBalls.find(b => b.id === 0);
       if (cueBall) {
         cueBall.state = 'active';
-        cueBall.position = { x: -0.635, z: 0 }; // Reposition cue ball behind headstring
+        const clearSpot = findClearCueBallSpot(
+          { x: -0.635, z: 0 },
+          finalBalls,
+          rules.getState().isBreakShot
+        );
+        cueBall.position = { x: clearSpot.x, z: clearSpot.z };
         cueBall.velocity = { x: 0, z: 0 };
+        cueBall.angularVelocity = { x: 0, y: 0, z: 0 };
         cueBall.height = 0;
       }
     }
@@ -232,17 +239,17 @@ export class MultiplayerService {
   }
 
   /**
-   * Update cue ball position during Ball-in-Hand placement
+   * Confirm cue ball position and clear Ball-in-Hand state
    */
-  public static async updateCueBallPlacement(
+  public static async confirmCueBallPlacement(
     matchId: string,
     position: { x: number; z: number }
-  ): Promise<void> {
-    if (!db) return;
+  ): Promise<MatchDocument | null> {
+    if (!db) return null;
     try {
       const ref = doc(db, 'matches', matchId);
       const snap = await getDoc(ref);
-      if (!snap.exists()) return;
+      if (!snap.exists()) return null;
 
       const matchData = snap.data() as MatchDocument;
       const balls = matchData.balls.map(b => {
@@ -251,6 +258,7 @@ export class MultiplayerService {
             ...b,
             position: { x: position.x, z: position.z },
             velocity: { x: 0, z: 0 },
+            angularVelocity: { x: 0, y: 0, z: 0 },
             height: 0,
             state: 'active' as const,
           };
@@ -258,10 +266,37 @@ export class MultiplayerService {
         return b;
       });
 
-      await updateDoc(ref, { balls });
+      const updatedRulesState: RulesState = {
+        ...matchData.rulesState,
+        isBallInHand: false,
+        status: matchData.rulesState.status === 'game_over' ? 'game_over' : 'in_turn',
+      };
+
+      const updatePayload = {
+        balls,
+        rulesState: updatedRulesState,
+      };
+
+      await updateDoc(ref, updatePayload);
+
+      return {
+        ...matchData,
+        ...updatePayload,
+      };
     } catch (err) {
-      console.warn('Failed to sync cue ball placement:', err);
+      console.warn('Failed to confirm cue ball placement in Firestore:', err);
+      return null;
     }
+  }
+
+  /**
+   * Update cue ball position during Ball-in-Hand placement
+   */
+  public static async updateCueBallPlacement(
+    matchId: string,
+    position: { x: number; z: number }
+  ): Promise<void> {
+    await this.confirmCueBallPlacement(matchId, position);
   }
 
   /**

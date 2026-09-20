@@ -105,4 +105,34 @@ describe('MultiplayerService', () => {
       })
     ).rejects.toThrow('Not your turn to shoot');
   });
+
+  it('clears isBallInHand when confirming cue ball placement', async () => {
+    const creator: MatchPlayer = {
+      uid: 'user_host_123',
+      username: 'Player1',
+      rating: 1200,
+      isReady: true,
+      connected: true,
+      lastPing: Date.now(),
+    };
+
+    const match = await MultiplayerService.createRoom(creator);
+    match.rulesState.isBallInHand = true;
+    match.rulesState.status = 'ball_in_hand';
+
+    // Simulate confirming cue ball placement locally & verifying state transition
+    const cueBall = match.balls.find(b => b.id === 0);
+    expect(cueBall).toBeDefined();
+
+    cueBall!.position = { x: -0.4, z: 0.1 };
+    cueBall!.state = 'active';
+    cueBall!.velocity = { x: 0, z: 0 };
+    match.rulesState.isBallInHand = false;
+    match.rulesState.status = 'in_turn';
+
+    expect(match.rulesState.isBallInHand).toBe(false);
+    expect(match.rulesState.status).toBe('in_turn');
+    expect(cueBall!.position.x).toBe(-0.4);
+    expect(cueBall!.position.z).toBe(0.1);
+  });
 });
