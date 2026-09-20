@@ -596,7 +596,7 @@ export default function SinglePlayerGame() {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-neutral-950 flex flex-col">
-      <NavigationHeader />
+      {!gameStarted && <NavigationHeader />}
 
       {!gameStarted && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
@@ -654,36 +654,37 @@ export default function SinglePlayerGame() {
           cameraMode={cameraMode}
           isMuted={isMuted}
           onToggleMute={toggleMute}
+          onSurrender={() => setGameStarted(false)}
         />
       )}
 
       {/* Ball-in-Hand Placement Action Controls */}
       {gameStarted && rulesState.currentTurn === 'player1' && !isShooting && rulesState.isBallInHand && (
-        <div className="absolute bottom-6 inset-x-0 pointer-events-none flex justify-center px-4 sm:px-8 z-30">
-          <div className="pointer-events-auto bg-neutral-900/95 backdrop-blur-md border border-neutral-700/80 p-4 rounded-3xl shadow-2xl flex flex-col sm:flex-row items-center space-y-3 sm:space-y-0 sm:space-x-6 max-w-lg w-full justify-between">
-            <div className="flex items-center space-x-3 text-left">
+        <div className="absolute bottom-3 sm:bottom-6 inset-x-0 pointer-events-none flex justify-center px-2 sm:px-6 z-30">
+          <div className="pointer-events-auto bg-neutral-900/95 backdrop-blur-md border border-neutral-700/80 p-2 sm:p-3 rounded-2xl sm:rounded-3xl shadow-2xl flex items-center justify-between max-w-md w-full gap-2">
+            <div className="flex items-center space-x-2 text-left min-w-0">
               <div
-                className={`p-2.5 rounded-2xl ${
+                className={`p-1.5 sm:p-2 rounded-xl shrink-0 ${
                   isPlacementValid
                     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
                     : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
                 }`}
               >
-                <Move className="w-5 h-5" />
+                <Move className="w-4 h-4" />
               </div>
-              <div>
-                <h4 className="text-sm font-bold text-white flex items-center space-x-1.5">
+              <div className="truncate">
+                <h4 className="text-xs sm:text-sm font-bold text-white flex items-center space-x-1.5 truncate">
                   <span>Ball in Hand</span>
                   {rulesState.isBreakShot && (
-                    <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                      Behind Head String
+                    <span className="text-[9px] uppercase font-semibold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      Kitchen
                     </span>
                   )}
                 </h4>
-                <p className={`text-xs mt-0.5 ${isPlacementValid ? 'text-neutral-400' : 'text-rose-400 font-medium'}`}>
+                <p className={`text-[10px] sm:text-xs truncate ${isPlacementValid ? 'text-neutral-400' : 'text-rose-400 font-medium'}`}>
                   {isPlacementValid
-                    ? 'Click or drag anywhere on table to position cue ball'
-                    : 'Overlapping another ball or cushion! Reposition cue ball.'}
+                    ? 'Drag or tap table to place cue ball'
+                    : 'Overlapping ball or cushion! Reposition.'}
                 </p>
               </div>
             </div>
@@ -691,14 +692,14 @@ export default function SinglePlayerGame() {
             <button
               onClick={handleConfirmPlacement}
               disabled={!isPlacementValid}
-              className={`px-5 py-2.5 rounded-2xl font-bold text-xs tracking-wider transition shadow-lg flex items-center space-x-2 shrink-0 ${
+              className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold text-xs tracking-wider transition shadow-lg flex items-center space-x-1.5 shrink-0 ${
                 isPlacementValid
-                  ? 'bg-emerald-500 hover:bg-emerald-400 text-neutral-950 hover:scale-105 active:scale-95 cursor-pointer shadow-emerald-500/20'
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-neutral-950 active:scale-95 cursor-pointer shadow-emerald-500/20'
                   : 'bg-neutral-800 text-neutral-500 border border-neutral-700 cursor-not-allowed opacity-60'
               }`}
             >
-              <Check className="w-4 h-4 stroke-[2.5]" />
-              <span>Confirm Spot</span>
+              <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>Confirm</span>
             </button>
           </div>
         </div>
@@ -706,8 +707,8 @@ export default function SinglePlayerGame() {
 
       {/* Standard Cue Aiming & Power Controls */}
       {gameStarted && rulesState.currentTurn === 'player1' && !isShooting && !rulesState.isBallInHand && (
-        <div className="absolute bottom-4 inset-x-0 pointer-events-none flex justify-between items-end px-4 sm:px-8 z-20">
-          <div className="pointer-events-auto bg-neutral-900/85 backdrop-blur-md border border-neutral-800 p-3 rounded-2xl shadow-2xl">
+        <div className="absolute bottom-2 sm:bottom-4 inset-x-0 pointer-events-none flex justify-between items-end px-2 sm:px-6 z-20">
+          <div className="pointer-events-auto">
             <SpinControl
               spinX={spinX}
               spinY={spinY}
@@ -718,27 +719,7 @@ export default function SinglePlayerGame() {
             />
           </div>
 
-          <div className="pointer-events-auto flex items-center space-x-2 bg-neutral-900/85 backdrop-blur-md border border-neutral-800 px-4 py-2 rounded-2xl shadow-2xl">
-            <button
-              onClick={() => updateAimAngle(a => a - 0.0035)}
-              className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-600 text-white font-bold text-xs transition"
-              title="Micro-step left (0.2°)"
-            >
-              ◀ Fine
-            </button>
-            <span className="text-xs text-neutral-300 font-mono w-14 text-center">
-              {((((aimAngle * 180) / Math.PI) % 360 + 360) % 360).toFixed(1)}°
-            </span>
-            <button
-              onClick={() => updateAimAngle(a => a + 0.0035)}
-              className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-600 text-white font-bold text-xs transition"
-              title="Micro-step right (0.2°)"
-            >
-              Fine ▶
-            </button>
-          </div>
-
-          <div className="pointer-events-auto bg-neutral-900/85 backdrop-blur-md border border-neutral-800 p-3 rounded-2xl shadow-2xl">
+          <div className="pointer-events-auto bg-neutral-900/90 backdrop-blur-md border border-neutral-800 p-2 sm:p-2.5 rounded-2xl shadow-2xl">
             <PowerMeter
               power={power}
               onChange={updatePower}

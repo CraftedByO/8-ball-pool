@@ -87,9 +87,9 @@ export const PowerMeter: React.FC<PowerMeterProps> = ({
         </span>
       </div>
 
-      <div className="flex items-center gap-2">
-        {/* Quick Power Preset Buttons */}
-        <div className="flex flex-col justify-between h-44 py-1">
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* Quick Power Preset Buttons (Shown on tablet/desktop) */}
+        <div className="hidden sm:flex flex-col justify-between h-44 py-1">
           {presets.slice().reverse().map(p => (
             <button
               key={p.label}
@@ -111,7 +111,7 @@ export const PowerMeter: React.FC<PowerMeterProps> = ({
         <div
           ref={barRef}
           onPointerDown={handlePointerDown}
-          className={`relative w-8 h-44 rounded-xl bg-neutral-950 border border-neutral-700 p-1 flex flex-col justify-end shadow-2xl overflow-hidden touch-none ${
+          className={`relative w-7 sm:w-8 h-32 sm:h-44 rounded-xl bg-neutral-950 border border-neutral-700 p-1 flex flex-col justify-end shadow-2xl overflow-hidden touch-none ${
             disabled
               ? 'opacity-40 cursor-not-allowed'
               : 'cursor-ns-resize hover:border-emerald-400 transition-colors'
@@ -148,7 +148,7 @@ export const PowerMeter: React.FC<PowerMeterProps> = ({
         type="button"
         disabled={disabled}
         onClick={onRelease}
-        className={`w-full py-2 px-3 rounded-xl font-black text-xs uppercase tracking-wider transition-all duration-150 flex items-center justify-center gap-1 shadow-lg ${
+        className={`w-full py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl font-black text-[11px] sm:text-xs uppercase tracking-wider transition-all duration-150 flex items-center justify-center gap-1 shadow-lg ${
           disabled
             ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
             : heightPercent > 80
@@ -157,7 +157,7 @@ export const PowerMeter: React.FC<PowerMeterProps> = ({
         }`}
       >
         <span>Strike</span>
-        <span className="text-[10px] opacity-75 font-normal">␣</span>
+        <span className="text-[10px] opacity-75 font-normal hidden sm:inline">␣</span>
       </button>
     </div>
   );

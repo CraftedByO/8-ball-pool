@@ -145,6 +145,7 @@ export class PoolGameRenderer {
 
     // Camera
     this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+    this.adjustCameraFov();
     this.camera.position.set(-2.5, 2.0, 0);
     this.camera.lookAt(0, 0, 0);
 
@@ -1548,22 +1549,42 @@ export class PoolGameRenderer {
     }
   }
 
+  private adjustCameraFov() {
+    if (!this.camera) return;
+    const aspect = this.camera.aspect;
+    // Base desktop fov is 45deg for aspect >= 1.33
+    // On mobile portrait (aspect < 1.33), increase vertical FOV smoothly to maintain comfortable horizontal framing
+    if (aspect < 1.33) {
+      const targetFov = 2 * Math.atan(Math.tan((45 * Math.PI) / 360) * (1.33 / Math.max(0.55, aspect))) * (180 / Math.PI);
+      this.camera.fov = Math.min(75, Math.max(45, targetFov));
+    } else {
+      this.camera.fov = 45;
+    }
+  }
+
   /**
    * Set dynamic camera positioning
    */
   public updateCamera(cueBall?: BallPhysicsState, aimAngle: number = 0, isBallInHand: boolean = false) {
+    const aspect = this.camera.aspect;
+    const isPortrait = aspect < 1.0;
+
     if (this.cameraMode === 'overhead') {
-      // Tactical top-down view
-      this.targetCameraPos.set(0, 3.2, 0);
+      // Tactical top-down view: in portrait, scale height so entire table length fits on screen
+      const baseHeight = 3.2;
+      const height = isPortrait ? Math.max(baseHeight, 1.85 / Math.max(0.45, aspect)) : baseHeight;
+      this.targetCameraPos.set(0, height, 0);
       this.targetCameraLookAt.set(0, 0, 0);
     } else if (isBallInHand) {
       // Elevated perspective view for intuitive ball placement across entire table
-      this.targetCameraPos.set(0, 2.3, 1.75);
+      const scale = isPortrait ? Math.max(1, 0.85 / Math.max(0.45, aspect)) : 1;
+      this.targetCameraPos.set(0, 2.3 * scale, 1.75 * scale);
       this.targetCameraLookAt.set(0, 0, 0);
     } else if (cueBall) {
       // Over-the-shoulder cue aiming view
-      const camDist = 1.35;
-      const camHeight = 0.65;
+      const distScale = isPortrait ? Math.min(1.3, 0.9 / Math.max(0.55, aspect)) : 1.0;
+      const camDist = 1.35 * distScale;
+      const camHeight = 0.65 * distScale;
       const cosA = Math.cos(aimAngle);
       const sinA = Math.sin(aimAngle);
 
@@ -1589,6 +1610,7 @@ export class PoolGameRenderer {
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
     this.camera.aspect = width / height;
+    this.adjustCameraFov();
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
   };
