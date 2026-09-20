@@ -11,6 +11,7 @@ export const NavigationHeader: React.FC = () => {
   const navLinks = [
     { href: '/', label: 'Home', icon: Gamepad2 },
     { href: '/play', label: 'Single Player', icon: Bot },
+    { href: '/online', label: 'Online vs Friend', icon: Users },
     { href: '/help', label: 'Rules & Guide', icon: HelpCircle },
   ];
 

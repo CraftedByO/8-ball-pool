@@ -43,22 +43,30 @@ export default function HomePage() {
           True-to-life billiards physics with authentic sliding, rolling, topspin, backspin, English, and cushion restitution. Hone your skills and shot-making against strategic AI opponents.
         </p>
 
-        {/* Primary Single Player Play Button */}
-        <div className="mt-10 sm:mt-12 flex flex-col sm:flex-row items-center justify-center gap-4 w-full max-w-md">
+        {/* Primary Play Action Buttons */}
+        <div className="mt-10 sm:mt-12 flex flex-col sm:flex-row items-center justify-center gap-3.5 w-full max-w-xl">
           <Link
-            href="/play"
-            className="group relative w-full sm:w-auto flex-1 p-5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-extrabold text-base shadow-2xl shadow-emerald-600/30 transition-all duration-300 flex items-center justify-center space-x-3 border border-emerald-400/40 hover:scale-[1.02]"
+            href="/online"
+            className="group relative w-full sm:w-auto flex-1 p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-cyan-600 via-teal-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-white font-extrabold text-base shadow-2xl shadow-cyan-600/30 transition-all duration-300 flex items-center justify-center space-x-3 border border-cyan-400/40 hover:scale-[1.02]"
           >
-            <Bot className="w-5 h-5" />
-            <span>Play Single Player</span>
+            <Users className="w-5 h-5" />
+            <span>Play with a Friend</span>
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </Link>
 
           <Link
-            href="/help"
-            className="w-full sm:w-auto px-6 py-5 rounded-2xl bg-neutral-900/90 hover:bg-neutral-850 text-neutral-300 hover:text-white font-bold text-sm border border-neutral-800 transition shadow-lg flex items-center justify-center space-x-2"
+            href="/play"
+            className="w-full sm:w-auto flex-1 p-4 sm:p-5 rounded-2xl bg-neutral-900/90 hover:bg-neutral-850 text-white font-extrabold text-base border border-neutral-700 hover:border-emerald-500/50 transition-all duration-300 shadow-xl flex items-center justify-center space-x-3 hover:scale-[1.02]"
           >
-            <span>Rules & Controls</span>
+            <Bot className="w-5 h-5 text-emerald-400" />
+            <span>Single Player</span>
+          </Link>
+
+          <Link
+            href="/help"
+            className="w-full sm:w-auto px-5 py-4 sm:py-5 rounded-2xl bg-neutral-900/70 hover:bg-neutral-800 text-neutral-400 hover:text-white font-semibold text-sm border border-neutral-800 transition shadow flex items-center justify-center space-x-2"
+          >
+            <span>Rules</span>
           </Link>
         </div>
 

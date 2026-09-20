@@ -230,4 +230,63 @@ export class MultiplayerService {
 
     return updatedMatch;
   }
+
+  /**
+   * Update cue ball position during Ball-in-Hand placement
+   */
+  public static async updateCueBallPlacement(
+    matchId: string,
+    position: { x: number; z: number }
+  ): Promise<void> {
+    if (!db) return;
+    try {
+      const ref = doc(db, 'matches', matchId);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return;
+
+      const matchData = snap.data() as MatchDocument;
+      const balls = matchData.balls.map(b => {
+        if (b.id === 0) {
+          return {
+            ...b,
+            position: { x: position.x, z: position.z },
+            velocity: { x: 0, z: 0 },
+            height: 0,
+            state: 'active' as const,
+          };
+        }
+        return b;
+      });
+
+      await updateDoc(ref, { balls });
+    } catch (err) {
+      console.warn('Failed to sync cue ball placement:', err);
+    }
+  }
+
+  /**
+   * Forfeit/concede a match
+   */
+  public static async forfeitMatch(
+    matchId: string,
+    forfeiterUid: string
+  ): Promise<void> {
+    if (!db) return;
+    try {
+      const ref = doc(db, 'matches', matchId);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return;
+
+      const match = snap.data() as MatchDocument;
+      const winnerPlayer = match.player1.uid === forfeiterUid ? match.player2 : match.player1;
+      if (!winnerPlayer) return;
+
+      await updateDoc(ref, {
+        status: 'completed',
+        winnerUid: winnerPlayer.uid,
+      });
+    } catch (err) {
+      console.warn('Failed to forfeit match:', err);
+    }
+  }
 }
