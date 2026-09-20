@@ -595,7 +595,7 @@ export default function SinglePlayerGame() {
     : [];
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-neutral-950 flex flex-col">
+    <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-neutral-950 flex flex-col select-none">
       {!gameStarted && <NavigationHeader />}
 
       {!gameStarted && (
@@ -660,7 +660,12 @@ export default function SinglePlayerGame() {
 
       {/* Ball-in-Hand Placement Action Controls */}
       {gameStarted && rulesState.currentTurn === 'player1' && !isShooting && rulesState.isBallInHand && (
-        <div className="absolute bottom-3 sm:bottom-6 inset-x-0 pointer-events-none flex justify-center px-2 sm:px-6 z-30">
+        <div
+          className="absolute inset-x-0 pointer-events-none flex justify-center px-2 sm:px-6 z-30"
+          style={{
+            bottom: 'max(1rem, calc(env(safe-area-inset-bottom, 0px) + 0.75rem))',
+          }}
+        >
           <div className="pointer-events-auto bg-neutral-900/95 backdrop-blur-md border border-neutral-700/80 p-2 sm:p-3 rounded-2xl sm:rounded-3xl shadow-2xl flex items-center justify-between max-w-md w-full gap-2">
             <div className="flex items-center space-x-2 text-left min-w-0">
               <div
@@ -707,7 +712,12 @@ export default function SinglePlayerGame() {
 
       {/* Standard Cue Aiming & Power Controls */}
       {gameStarted && rulesState.currentTurn === 'player1' && !isShooting && !rulesState.isBallInHand && (
-        <div className="absolute bottom-2 sm:bottom-4 inset-x-0 pointer-events-none flex justify-between items-end px-2 sm:px-6 z-20">
+        <div
+          className="absolute inset-x-0 pointer-events-none flex justify-between items-end px-3 sm:px-6 z-20"
+          style={{
+            bottom: 'max(1rem, calc(env(safe-area-inset-bottom, 0px) + 0.75rem))',
+          }}
+        >
           <div className="pointer-events-auto">
             <SpinControl
               spinX={spinX}
@@ -731,7 +741,12 @@ export default function SinglePlayerGame() {
       )}
 
       {isAiThinking && (
-        <div className="absolute bottom-12 inset-x-0 flex justify-center pointer-events-none z-20">
+        <div
+          className="absolute inset-x-0 flex justify-center pointer-events-none z-20"
+          style={{
+            bottom: 'max(3.5rem, calc(env(safe-area-inset-bottom, 0px) + 3rem))',
+          }}
+        >
           <div className="px-5 py-2 rounded-full bg-neutral-900/90 border border-neutral-700 text-emerald-400 font-semibold text-xs tracking-wider shadow-2xl flex items-center space-x-2 animate-pulse">
             <span>AI Bot is planning shot...</span>
           </div>

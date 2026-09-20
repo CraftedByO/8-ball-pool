@@ -170,6 +170,7 @@ export class PoolGameRenderer {
     this.buildBallInHandGuide();
 
     window.addEventListener('resize', this.onResize);
+    window.visualViewport?.addEventListener('resize', this.onResize);
     this.startRenderLoop();
   }
 
@@ -1628,6 +1629,7 @@ export class PoolGameRenderer {
       cancelAnimationFrame(this.animationFrameId);
     }
     window.removeEventListener('resize', this.onResize);
+    window.visualViewport?.removeEventListener('resize', this.onResize);
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement) {
       this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);

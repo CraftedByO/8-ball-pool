@@ -99,27 +99,27 @@ export const SpinControl: React.FC<SpinControlProps> = ({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center space-x-2 px-2.5 py-1.5 rounded-xl border transition-all duration-200 shadow-xl ${
+        className={`flex items-center space-x-2 px-3 py-2 rounded-2xl border backdrop-blur-md transition-all duration-200 shadow-2xl ${
           isOpen || hasSpin
-            ? 'bg-neutral-800 border-emerald-500/60 text-emerald-400'
+            ? 'bg-neutral-900/95 border-emerald-500/60 text-emerald-400'
             : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-700/80 text-neutral-300'
         }`}
         title="Cue Ball English & Spin"
       >
         {/* Mini Ball Thumbnail */}
-        <div className="relative w-6 h-6 rounded-full bg-gradient-to-br from-white via-neutral-100 to-neutral-300 border border-neutral-400 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
+        <div className="relative w-7 h-7 rounded-full bg-gradient-to-br from-white via-neutral-100 to-neutral-300 border-2 border-neutral-400 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
           <div className="absolute top-1/2 left-0 right-0 h-[0.5px] bg-neutral-300 pointer-events-none" />
           <div className="absolute left-1/2 top-0 bottom-0 w-[0.5px] bg-neutral-300 pointer-events-none" />
           <div
-            className="absolute w-2 h-2 -ml-1 -mt-1 rounded-full bg-red-600 border border-white shadow-sm"
+            className="absolute w-2.5 h-2.5 -ml-[5px] -mt-[5px] rounded-full bg-red-600 border border-white shadow-sm"
             style={{ left: `${tipLeft}%`, top: `${tipTop}%` }}
           />
         </div>
         <div className="flex flex-col text-left">
-          <span className="text-[10px] font-bold tracking-wider uppercase leading-none">
+          <span className="text-[11px] font-bold tracking-wider uppercase leading-none">
             Spin
           </span>
-          <span className="text-[9px] text-neutral-400 font-mono leading-none mt-0.5">
+          <span className="text-[9px] text-neutral-400 font-mono leading-none mt-1">
             {hasSpin ? `${spinX > 0 ? `+${spinX}` : spinX}, ${spinY > 0 ? `+${spinY}` : spinY}` : 'Center'}
           </span>
         </div>
