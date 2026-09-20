@@ -11,7 +11,7 @@ import { MatchResultModal } from '../../components/MatchResultModal';
 import { initAnonymousAuth, getPlayerProfile, claimUsername } from '../../firebase/auth';
 import { PlayerProfile } from '../../leaderboard/types';
 import { MultiplayerService } from '../../multiplayer/service';
-import { MatchDocument, MatchPlayer } from '../../multiplayer/types';
+import { MatchDocument, MatchPlayer, LiveAimState } from '../../multiplayer/types';
 import { BilliardsPhysicsEngine } from '../../physics/engine';
 import { EightBallRulesEngine } from '../../rules/engine';
 import { PoolGameRenderer } from '../../game/scene';
@@ -97,6 +97,46 @@ function OnlineMultiplayerContent() {
   const isDraggingCueBallRef = useRef(false);
   const lastPointerX = useRef(0);
   const pointerDownPos = useRef({ x: 0, y: 0 });
+
+  // Opponent live aiming and interaction refs
+  const matchRef = useRef<MatchDocument | null>(null);
+  matchRef.current = match;
+  const oppLiveStateRef = useRef<LiveAimState | null>(null);
+  const oppAimAngleRef = useRef<number>(0);
+  const oppPowerRef = useRef<number>(0);
+  const lastBroadcastRef = useRef<number>(0);
+
+  const broadcastLiveAimState = useCallback(
+    (params?: {
+      customAim?: number;
+      customPower?: number;
+      customPos?: { x: number; z: number };
+      immediate?: boolean;
+    }) => {
+      if (!match?.id || !isMyTurnRef.current || isShootingRef.current) return;
+      const now = performance.now();
+      if (!params?.immediate && now - lastBroadcastRef.current < 70) {
+        return;
+      }
+      lastBroadcastRef.current = now;
+
+      const myRole = isPlayer1 ? 'player1' : 'player2';
+      const angle = params?.customAim !== undefined ? params.customAim : aimAngleRef.current;
+      const pow = params?.customPower !== undefined ? params.customPower : powerRef.current;
+      const pos = params?.customPos;
+
+      MultiplayerService.updateLiveAimState(match.id, {
+        shooter: myRole,
+        aimAngle: angle,
+        power: pow,
+        spinX,
+        spinY,
+        cueBallPos: pos,
+        updatedAt: Date.now(),
+      });
+    },
+    [match?.id, isPlayer1, spinX, spinY]
+  );
 
   // 1. Initialize Auth & Profile
   useEffect(() => {
@@ -201,6 +241,13 @@ function OnlineMultiplayerContent() {
     if (!match?.id) return;
 
     const unsubscribe = MultiplayerService.subscribeToMatch(match.id, updatedMatch => {
+      // Sync opponent live aiming / positioning telemetry
+      if (updatedMatch.liveState) {
+        oppLiveStateRef.current = updatedMatch.liveState;
+      } else {
+        oppLiveStateRef.current = null;
+      }
+
       setMatch(prevMatch => {
         // Detect if an opponent shot was received
         if (
@@ -208,6 +255,7 @@ function OnlineMultiplayerContent() {
           updatedMatch.lastShot.shotSeq > lastShotSeqRef.current
         ) {
           lastShotSeqRef.current = updatedMatch.lastShot.shotSeq;
+          oppLiveStateRef.current = null;
 
           // If shooter is opponent, animate shot on local 3D table!
           const isLocalShooter =
@@ -290,27 +338,67 @@ function OnlineMultiplayerContent() {
         const cueBall = physics.getCueBall();
         renderer.updateBalls(physics.getBalls());
 
-        if (cueBall && isMyTurnRef.current && !isShootingRef.current && !isBallInHandRef.current) {
-          const traj = calculateAimTrajectory(cueBall, aimAngleRef.current, physics.getBalls());
-          renderer.updateTrajectory(traj, true);
-          renderer.updateCueStick(cueBall, aimAngleRef.current, powerRef.current, true);
-          renderer.updateBallInHandGuide(false);
-        } else if (isBallInHandRef.current && isMyTurnRef.current && cueBall) {
-          renderer.updateTrajectory(null, false);
-          renderer.updateCueStick(cueBall, aimAngleRef.current, 0, false);
-          const valid = isBallInHandPlacementValid(
-            cueBall.position,
-            physics.getBalls(),
-            isBreakShotRef.current
-          );
-          renderer.updateBallInHandGuide(true, cueBall.position, valid);
-        } else {
-          renderer.updateTrajectory(null, false);
-          renderer.updateCueStick(cueBall, aimAngleRef.current, 0, false);
-          renderer.updateBallInHandGuide(false);
-        }
+        if (isMyTurnRef.current) {
+          if (cueBall && !isShootingRef.current && !isBallInHandRef.current) {
+            const traj = calculateAimTrajectory(cueBall, aimAngleRef.current, physics.getBalls());
+            renderer.updateTrajectory(traj, true);
+            renderer.updateCueStick(cueBall, aimAngleRef.current, powerRef.current, true);
+            renderer.updateBallInHandGuide(false);
+          } else if (isBallInHandRef.current && cueBall) {
+            renderer.updateTrajectory(null, false);
+            renderer.updateCueStick(cueBall, aimAngleRef.current, 0, false);
+            const valid = isBallInHandPlacementValid(
+              cueBall.position,
+              physics.getBalls(),
+              isBreakShotRef.current
+            );
+            renderer.updateBallInHandGuide(true, cueBall.position, valid);
+          } else {
+            renderer.updateTrajectory(null, false);
+            renderer.updateCueStick(cueBall, aimAngleRef.current, 0, false);
+            renderer.updateBallInHandGuide(false);
+          }
 
-        renderer.updateCamera(cueBall, aimAngleRef.current, isBallInHandRef.current && isMyTurnRef.current);
+          renderer.updateCamera(cueBall, aimAngleRef.current, isBallInHandRef.current);
+        } else {
+          // SPECTATOR MODE: Live Opponent Movement Synchronization!
+          const oppLive = oppLiveStateRef.current;
+          if (oppLive) {
+            // Shortest-arc lerp for smooth opponent cue rotation
+            let angleDiff = (oppLive.aimAngle - oppAimAngleRef.current + Math.PI) % (Math.PI * 2) - Math.PI;
+            oppAimAngleRef.current += angleDiff * Math.min(1, dt * 14);
+
+            // Smooth lerp for power pullback
+            oppPowerRef.current += (oppLive.power - oppPowerRef.current) * Math.min(1, dt * 14);
+          }
+
+          if (isBallInHandRef.current && cueBall) {
+            if (oppLive?.cueBallPos) {
+              cueBall.position.x += (oppLive.cueBallPos.x - cueBall.position.x) * Math.min(1, dt * 18);
+              cueBall.position.z += (oppLive.cueBallPos.z - cueBall.position.z) * Math.min(1, dt * 18);
+              cueBall.height = 0;
+              cueBall.state = 'active';
+              renderer.updateBalls(physics.getBalls());
+              renderer.updateBallInHandGuide(true, cueBall.position, true);
+            }
+            renderer.updateTrajectory(null, false);
+            renderer.updateCueStick(cueBall, 0, 0, false);
+            renderer.updateCamera(cueBall, 0, true);
+          } else if (cueBall && !isShootingRef.current && oppLive) {
+            const oppAngle = oppAimAngleRef.current;
+            const oppPow = oppPowerRef.current;
+            const oppTraj = calculateAimTrajectory(cueBall, oppAngle, physics.getBalls());
+            renderer.updateTrajectory(oppTraj, true);
+            renderer.updateCueStick(cueBall, oppAngle, oppPow, true);
+            renderer.updateBallInHandGuide(false);
+            renderer.updateCamera(cueBall, oppAngle, false);
+          } else {
+            renderer.updateTrajectory(null, false);
+            renderer.updateCueStick(cueBall, 0, 0, false);
+            renderer.updateBallInHandGuide(false);
+            renderer.updateCamera(cueBall, 0, false);
+          }
+        }
       }
     };
 
@@ -347,6 +435,9 @@ function OnlineMultiplayerContent() {
     setIsShooting(true);
     soundFX.playCueStrike(power);
     physicsRef.current.strikeCueBall(shotParams);
+
+    // Clear opponent's live aim stick immediately
+    MultiplayerService.updateLiveAimState(match.id, null);
 
     try {
       const updatedMatch = await MultiplayerService.submitShot(match, user.uid, shotParams);
@@ -387,7 +478,8 @@ function OnlineMultiplayerContent() {
     setIsPlacementValid(valid);
     rendererRef.current.updateBalls(physicsRef.current.getBalls());
     rendererRef.current.updateBallInHandGuide(true, clamped, valid);
-  }, []);
+    broadcastLiveAimState({ customPos: clamped });
+  }, [broadcastLiveAimState]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!isMyTurn || isShooting || !rendererRef.current || !physicsRef.current) return;
@@ -416,7 +508,11 @@ function OnlineMultiplayerContent() {
     const deltaX = e.clientX - lastPointerX.current;
     lastPointerX.current = e.clientX;
     const sensitivity = 0.0024;
-    setAimAngle(prev => prev + deltaX * sensitivity);
+    setAimAngle(prev => {
+      const next = prev + deltaX * sensitivity;
+      broadcastLiveAimState({ customAim: next });
+      return next;
+    });
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -443,7 +539,9 @@ function OnlineMultiplayerContent() {
         if (closestBall) {
           const dx = closestBall.position.x - cue.position.x;
           const dz = closestBall.position.z - cue.position.z;
-          setAimAngle(Math.atan2(dz, dx));
+          const newAngle = Math.atan2(dz, dx);
+          setAimAngle(newAngle);
+          broadcastLiveAimState({ customAim: newAngle, immediate: true });
         }
       }
     }
@@ -452,7 +550,11 @@ function OnlineMultiplayerContent() {
   const handleWheel = (e: React.WheelEvent) => {
     if (!isMyTurn || isShooting) return;
     e.preventDefault();
-    setAimAngle(a => a + e.deltaY * 0.0008);
+    setAimAngle(a => {
+      const next = a + e.deltaY * 0.0008;
+      broadcastLiveAimState({ customAim: next });
+      return next;
+    });
   };
 
   const handleConfirmPlacement = async () => {
@@ -858,6 +960,7 @@ function OnlineMultiplayerContent() {
               onChange={(x, y) => {
                 setSpinX(x);
                 setSpinY(y);
+                broadcastLiveAimState({ immediate: true });
               }}
             />
           </div>
@@ -865,7 +968,10 @@ function OnlineMultiplayerContent() {
           <div className="pointer-events-auto bg-neutral-900/90 backdrop-blur-md border border-neutral-800 p-2 sm:p-2.5 rounded-2xl shadow-2xl">
             <PowerMeter
               power={power}
-              onChange={setPower}
+              onChange={val => {
+                setPower(val);
+                broadcastLiveAimState({ customPower: val });
+              }}
               onRelease={handleShoot}
               disabled={isShooting}
             />
@@ -881,9 +987,18 @@ function OnlineMultiplayerContent() {
             bottom: 'max(2rem, calc(env(safe-area-inset-bottom, 0px) + 1.5rem))',
           }}
         >
-          <div className="px-5 py-2.5 rounded-full bg-neutral-900/90 border border-neutral-700 text-neutral-300 font-semibold text-xs tracking-wider shadow-2xl flex items-center space-x-2.5 animate-pulse">
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-            <span>Waiting for {opponentName} to shoot...</span>
+          <div className="px-5 py-2.5 rounded-full bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 text-neutral-300 font-semibold text-xs tracking-wider shadow-2xl flex items-center space-x-2.5">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+            </span>
+            <span>
+              {match.rulesState.isBallInHand
+                ? `${opponentName} is positioning cue ball...`
+                : match.liveState && match.liveState.power > 0.05
+                ? `${opponentName} is aiming... (Power: ${Math.round(match.liveState.power * 100)}%)`
+                : `${opponentName} is lining up shot...`}
+            </span>
           </div>
         </div>
       )}

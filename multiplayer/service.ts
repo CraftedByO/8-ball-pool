@@ -11,7 +11,7 @@ import {
   limit,
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { MatchDocument, MatchPlayer } from './types';
+import { MatchDocument, MatchPlayer, LiveAimState } from './types';
 import { createStandard8BallRack, findClearCueBallSpot } from '../physics/setup';
 import { EightBallRulesEngine } from '../rules/engine';
 import { RulesState } from '../rules/types';
@@ -227,6 +227,7 @@ export class MultiplayerService {
           balls: updatedMatch.balls,
           lastShot: updatedMatch.lastShot,
           status: updatedMatch.status,
+          liveState: null,
           winnerUid: updatedMatch.winnerUid || null,
           ratingDelta: updatedMatch.ratingDelta || null,
         });
@@ -322,6 +323,22 @@ export class MultiplayerService {
       });
     } catch (err) {
       console.warn('Failed to forfeit match:', err);
+    }
+  }
+
+  /**
+   * Broadcast real-time aim angle, power, spin, and ball-in-hand position to opponent
+   */
+  public static async updateLiveAimState(
+    matchId: string,
+    liveState: LiveAimState | null
+  ): Promise<void> {
+    if (!db) return;
+    try {
+      const ref = doc(db, 'matches', matchId);
+      await updateDoc(ref, { liveState: liveState || null });
+    } catch (err) {
+      // Non-critical telemetry - ignore transient network drops
     }
   }
 }

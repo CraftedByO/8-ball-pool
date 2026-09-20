@@ -135,4 +135,35 @@ describe('MultiplayerService', () => {
     expect(cueBall!.position.x).toBe(-0.4);
     expect(cueBall!.position.z).toBe(0.1);
   });
+
+  it('updates and clears live aiming telemetry state', async () => {
+    const creator: MatchPlayer = {
+      uid: 'user_host_123',
+      username: 'Player1',
+      rating: 1200,
+      isReady: true,
+      connected: true,
+      lastPing: Date.now(),
+    };
+
+    const match = await MultiplayerService.createRoom(creator);
+    match.liveState = {
+      shooter: 'player1',
+      aimAngle: 1.25,
+      power: 0.72,
+      spinX: 0.1,
+      spinY: -0.2,
+      cueBallPos: { x: -0.5, z: 0.1 },
+      updatedAt: Date.now(),
+    };
+
+    expect(match.liveState).toBeDefined();
+    expect(match.liveState?.aimAngle).toBe(1.25);
+    expect(match.liveState?.power).toBe(0.72);
+    expect(match.liveState?.cueBallPos).toEqual({ x: -0.5, z: 0.1 });
+
+    // Clearing live state (e.g. after shot execution)
+    match.liveState = undefined;
+    expect(match.liveState).toBeUndefined();
+  });
 });

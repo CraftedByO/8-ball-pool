@@ -12,6 +12,16 @@ export interface MatchPlayer {
   lastPing: number;
 }
 
+export interface LiveAimState {
+  shooter: PlayerId;
+  aimAngle: number;
+  power: number;
+  spinX: number;
+  spinY: number;
+  cueBallPos?: { x: number; z: number };
+  updatedAt: number;
+}
+
 export interface MatchDocument {
   id: string;
   roomCode: string;
@@ -22,6 +32,7 @@ export interface MatchDocument {
   turn: PlayerId;
   rulesState: RulesState;
   balls: BallPhysicsState[];
+  liveState?: LiveAimState;
   lastShot?: {
     shooter: PlayerId;
     params: ShotParameters;
