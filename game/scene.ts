@@ -4,15 +4,11 @@ import { BallPhysicsState } from '../physics/types';
 import {
   createBallTexture,
   createFeltTexture,
-  createHardwoodFloorTexture,
-  createHardwoodBumpTexture,
-  createSkylineTexture,
-  createRugTexture,
-  createGalleryArtTexture,
-  createGeminiBrandedArtTexture,
-  createGeminiGraffitiTexture,
   createMahoganyWoodTexture,
   createEnvironmentTexture,
+  createCarpetTexture,
+  createWallPanelTexture,
+  createSignTexture,
 } from './textures';
 import { TrajectoryPoint } from '../physics/trajectory';
 
@@ -144,6 +140,8 @@ export class PoolGameRenderer {
   private shadowDirty = true;
   private maxAnisotropy = 1;
   private sharedBallGeometry: THREE.SphereGeometry | null = null;
+  private vignette: HTMLDivElement | null = null;
+  private lampFixture: THREE.Group | null = null;
 
   // Camera views
   public cameraMode: 'player' | 'top_down' | 'overhead' = 'player';
@@ -158,7 +156,9 @@ export class PoolGameRenderer {
 
     // Scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#0f172a'); // Luxury penthouse twilight ambiance
+    this.scene.background = new THREE.Color('#08090b');
+    // Far walls dissolve into darkness so the lit table is the clear focal point
+    this.scene.fog = new THREE.Fog(0x08090b, 8, 18);
 
     // Camera
     this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
@@ -178,9 +178,11 @@ export class PoolGameRenderer {
     // Shadows only re-render when a ball actually moved (see markShadowsDirty)
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    // Khronos PBR Neutral keeps the cloth and ball colours true (ACES desaturates greens)
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
     container.appendChild(this.renderer.domElement);
+    this.addVignette(container);
 
     // Setup elements
     this.setupEnvironmentMap();
@@ -210,6 +212,7 @@ export class PoolGameRenderer {
       envTex.mapping = THREE.EquirectangularReflectionMapping;
       const envRenderTarget = pmremGen.fromEquirectangular(envTex);
       this.scene.environment = envRenderTarget.texture;
+      this.scene.environmentIntensity = 1.25;
       pmremGen.dispose();
       envTex.dispose();
     } catch (e) {
@@ -217,21 +220,33 @@ export class PoolGameRenderer {
     }
   }
 
+  /** Soft cinematic edge falloff; a CSS overlay costs nothing on the GPU and never intercepts input. */
+  private addVignette(container: HTMLElement) {
+    if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+    const v = document.createElement('div');
+    v.setAttribute('aria-hidden', 'true');
+    v.style.cssText =
+      'position:absolute;inset:0;pointer-events:none;z-index:1;' +
+      'background:radial-gradient(ellipse at 50% 55%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.38) 100%);';
+    container.appendChild(v);
+    this.vignette = v;
+  }
+
   private setupLighting() {
     // Every light costs every lit fragment, so the rig is deliberately small:
     // ambient + hemisphere fill, three pendant lamps (only the centre one casts a shadow).
     // The far wall is emissive and the PMREM environment map provides the rest of the room's ambience.
-    const ambientLight = new THREE.AmbientLight(0xfff7ed, 0.78);
+    const ambientLight = new THREE.AmbientLight(0xfff4e6, 0.42);
     this.scene.add(ambientLight);
 
-    const hemiLight = new THREE.HemisphereLight(0xc7d2fe, 0x78350f, 0.62);
+    const hemiLight = new THREE.HemisphereLight(0xdbe4ff, 0x1a120c, 0.38);
     this.scene.add(hemiLight);
 
     // Billiard overhead tournament 3-shade pendant fixture
     const lamps: Array<{ x: number; intensity: number; shadow: boolean }> = [
-      { x: 0.0, intensity: 6.6, shadow: true },
-      { x: -0.7, intensity: 2.1, shadow: false },
-      { x: 0.7, intensity: 2.1, shadow: false },
+      { x: 0.0, intensity: 8.2, shadow: true },
+      { x: -0.7, intensity: 2.6, shadow: false },
+      { x: 0.7, intensity: 2.6, shadow: false },
     ];
     for (const { x: lx, intensity, shadow } of lamps) {
       const lamp = new THREE.SpotLight(0xfffaed, intensity);
@@ -257,497 +272,152 @@ export class PoolGameRenderer {
 
   private buildBilliardsRoom() {
     const floorY = -TABLE_CONSTANTS.TABLE_HEIGHT;
+    const ceilingY = 3.5;
+    const HALF_X = 7.2;
+    const HALF_Z = 4.8;
+    const wallH = ceilingY - floorY;
+    const wallMidY = (ceilingY + floorY) / 2;
 
-    // 1. Warm herringbone hardwood parquet floor with authentic micro-bevel bump relief
-    const floorGeo = new THREE.PlaneGeometry(22, 22);
-    // Large room surfaces use Phong rather than full PBR: they cover most of the screen,
-    // and Phong keeps the polished-floor highlight at roughly half the per-pixel cost on integrated GPUs.
-    const floorMat = new THREE.MeshPhongMaterial({
-      map: createHardwoodFloorTexture(),
-      bumpMap: createHardwoodBumpTexture(),
-      bumpScale: 0.005,
-      specular: 0x2e2a26,
-      shininess: 70,
-    });
-    const floor = new THREE.Mesh(floorGeo, floorMat);
+    // Everything structural uses unlit (baked) materials: the lighting is painted into the textures,
+    // which looks richer than dynamic lights and costs almost nothing per pixel.
+
+    // 1. Deep tournament carpet
+    const carpetTex = createCarpetTexture();
+    carpetTex.repeat.set(18, 12);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(HALF_X * 2, HALF_Z * 2),
+      new THREE.MeshPhongMaterial({
+        map: carpetTex,
+        // Self-lit by the same pattern so the room floor stays readable outside the lamp's pool of light
+        emissive: 0x4a413c,
+        emissiveMap: carpetTex,
+        specular: 0x080706,
+        shininess: 6,
+      })
+    );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = floorY;
-    // No shadow sampling: the table's shadow falls beneath the table where it can't be seen
     this.scene.add(floor);
 
-    // Architectural Molded Perimeter Baseboards (Skirting Boards)
-    const baseboardMat = new THREE.MeshStandardMaterial({
-      color: 0x24150c, // deep polished espresso walnut
-      roughness: 0.35,
-      metalness: 0.05,
-    });
+    // 2. Walnut slat walls with baked lighting
+    const panelTex = createWallPanelTexture();
+    const makeWall = (width: number, x: number, z: number, rotY: number) => {
+      const tex = panelTex.clone();
+      tex.repeat.set(Math.round(width / 0.64), 1);
+      tex.needsUpdate = true;
+      const wall = new THREE.Mesh(
+        new THREE.PlaneGeometry(width, wallH),
+        new THREE.MeshBasicMaterial({ map: tex })
+      );
+      wall.position.set(x, wallMidY, z);
+      wall.rotation.y = rotY;
+      this.scene.add(wall);
+    };
+    makeWall(HALF_Z * 2, -HALF_X, 0, Math.PI / 2);
+    makeWall(HALF_Z * 2, HALF_X, 0, -Math.PI / 2);
+    makeWall(HALF_X * 2, 0, -HALF_Z, 0);
+    makeWall(HALF_X * 2, 0, HALF_Z, Math.PI);
 
-    // Far wall baseboard (x = 6.46)
-    const bbRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.12, 16.0), baseboardMat);
-    bbRight.position.set(6.46, floorY + 0.06, 0);
-    this.scene.add(bbRight);
-
-    // Left wall baseboard (x = -6.46)
-    const bbLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.12, 16.0), baseboardMat);
-    bbLeft.position.set(-6.46, floorY + 0.06, 0);
-    this.scene.add(bbLeft);
-
-    // Window wall baseboard apron (z = -5.46)
-    const bbWin = new THREE.Mesh(new THREE.BoxGeometry(24.0, 0.12, 0.04), baseboardMat);
-    bbWin.position.set(0, floorY + 0.06, -5.46);
-    this.scene.add(bbWin);
-
-    // Deep polished dark granite window sill ledge along window wall
-    const sillGeo = new THREE.BoxGeometry(24.0, 0.05, 0.28);
-    const sillMat = new THREE.MeshStandardMaterial({
-      color: 0x18181b,
-      roughness: 0.15,
-      metalness: 0.25,
-    });
-    const sill = new THREE.Mesh(sillGeo, sillMat);
-    sill.position.set(0, floorY + 0.145, -5.36);
-    this.scene.add(sill);
-
-    // 2. Luxury geometric designer area rug centered directly under pool table
-    const rugGeo = new THREE.PlaneGeometry(4.8, 3.5);
-    const rugMat = new THREE.MeshPhongMaterial({
-      map: createRugTexture(),
-      specular: 0x050505,
-      shininess: 6,
-    });
-    const rug = new THREE.Mesh(rugGeo, rugMat);
-    rug.rotation.x = -Math.PI / 2;
-    rug.position.set(0, floorY + 0.002, 0); // slightly above floor to prevent z-fighting
-    this.scene.add(rug);
-
-    // 3. Panoramic floor-to-ceiling skyline window wall (Background, z = -5.5)
-    // A. Glowing twilight city skyline backdrop
-    const skylineGeo = new THREE.PlaneGeometry(24, 10);
-    const skylineMat = new THREE.MeshBasicMaterial({
-      map: createSkylineTexture(),
-    });
-    const skyline = new THREE.Mesh(skylineGeo, skylineMat);
-    skyline.position.set(0, 2.2, -5.8);
-    this.scene.add(skyline);
-
-    // B. Floor-to-ceiling glass window pane
-    const glassGeo = new THREE.PlaneGeometry(24, 6.5);
-    // Unlit tint: a lit transparent pane covering the whole backdrop was a full-screen blend through every light
-    const glassMat = new THREE.MeshBasicMaterial({
-      color: 0x93c5fd,
-      transparent: true,
-      opacity: 0.10,
-      depthWrite: false,
-    });
-    const glassWall = new THREE.Mesh(glassGeo, glassMat);
-    glassWall.position.set(0, 1.8, -5.5);
-    this.scene.add(glassWall);
-
-    // C. Architectural black steel window mullions / columns
-    const mullionMat = new THREE.MeshStandardMaterial({
-      color: 0x18181b,
-      roughness: 0.5,
-      metalness: 0.7,
-    });
-
-    // Vertical steel columns
-    const colGeo = new THREE.BoxGeometry(0.12, 6.5, 0.15);
-    for (const colX of [-8, -5.5, -3, 0, 3, 5.5, 8]) {
-      const col = new THREE.Mesh(colGeo, mullionMat);
-      col.position.set(colX, 1.8, -5.48);
-      this.scene.add(col);
-    }
-
-    // Horizontal transom beams
-    const beamGeo = new THREE.BoxGeometry(24, 0.12, 0.15);
-    for (const beamY of [floorY + 0.06, 0.1, 1.9, 3.4]) {
-      const beam = new THREE.Mesh(beamGeo, mullionMat);
-      beam.position.set(0, beamY, -5.48);
-      this.scene.add(beam);
-    }
-
-    // 4. Left Wall: Modern Walnut Wood Slats & Framed Fine Art Gallery (x = -6.5)
-    const leftWallGeo = new THREE.PlaneGeometry(16, 6.5);
-    const leftWallMat = new THREE.MeshPhongMaterial({
-      color: 0x27272a, // dark charcoal plaster
-      specular: 0x000000,
-      shininess: 4,
-    });
-    const leftWall = new THREE.Mesh(leftWallGeo, leftWallMat);
-    leftWall.rotation.y = Math.PI / 2;
-    leftWall.position.set(-6.5, 1.8, 0);
-    this.scene.add(leftWall);
-
-    // Vertical walnut wood slats along left wall
-    const slatGeo = new THREE.BoxGeometry(0.04, 5.5, 0.08);
-    const slatMat = new THREE.MeshStandardMaterial({
-      color: 0x5c3a21, // warm walnut
-      roughness: 0.45,
-      metalness: 0.05,
-    });
-    for (let sz = -4.5; sz <= 4.5; sz += 0.35) {
-      if (sz > -1.5 && sz < 1.5) continue; // Leave center space for gallery art
-      const slat = new THREE.Mesh(slatGeo, slatMat);
-      slat.position.set(-6.44, 1.8, sz);
-      this.scene.add(slat);
-    }
-
-    // Framed modern gallery art piece
-    const artCanvasGeo = new THREE.PlaneGeometry(2.4, 1.5);
-    const artCanvasMat = new THREE.MeshStandardMaterial({
-      map: createGalleryArtTexture(),
-      roughness: 0.6,
-    });
-    const artCanvas = new THREE.Mesh(artCanvasGeo, artCanvasMat);
-    artCanvas.rotation.y = Math.PI / 2;
-    artCanvas.position.set(-6.42, 1.3, 0);
-    this.scene.add(artCanvas);
-
-    // Brushed brass frame around artwork
-    const artFrameMat = new THREE.MeshStandardMaterial({
-      color: 0xd4af37,
-      roughness: 0.25,
-      metalness: 0.85,
-    });
-    const frameTopGeo = new THREE.BoxGeometry(0.06, 0.06, 2.52);
-    const frameTop = new THREE.Mesh(frameTopGeo, artFrameMat);
-    frameTop.position.set(-6.40, 2.08, 0);
-    this.scene.add(frameTop);
-
-    const frameBottom = new THREE.Mesh(frameTopGeo, artFrameMat);
-    frameBottom.position.set(-6.40, 0.52, 0);
-    this.scene.add(frameBottom);
-
-    const frameSideGeo = new THREE.BoxGeometry(0.06, 1.62, 0.06);
-    const frameL = new THREE.Mesh(frameSideGeo, artFrameMat);
-    frameL.position.set(-6.40, 1.3, -1.23);
-    this.scene.add(frameL);
-
-    const frameR = new THREE.Mesh(frameSideGeo, artFrameMat);
-    frameR.position.set(-6.40, 1.3, 1.23);
-    this.scene.add(frameR);
-
-    // Wall-mounted cue stand on left wall (sz = -2.8)
-    const rackBaseGeo = new THREE.BoxGeometry(0.08, 0.05, 0.8);
-    const rackWoodMat = new THREE.MeshStandardMaterial({ color: 0x3d2314, roughness: 0.4 });
-    const rackBase = new THREE.Mesh(rackBaseGeo, rackWoodMat);
-    rackBase.position.set(-6.42, 0.1, -2.8);
-    this.scene.add(rackBase);
-
-    const rackTop = new THREE.Mesh(rackBaseGeo, rackWoodMat);
-    rackTop.position.set(-6.42, 1.8, -2.8);
-    this.scene.add(rackTop);
-
-    // 4 decorative cues standing in wall rack
-    const wallCueGeo = new THREE.CylinderGeometry(0.007, 0.014, 1.45, 12);
-    const wallCueMat = new THREE.MeshStandardMaterial({ color: 0xdec69a, roughness: 0.4 });
-    for (let c = 0; c < 4; c++) {
-      const cue = new THREE.Mesh(wallCueGeo, wallCueMat);
-      cue.position.set(-6.38, 0.95, -3.1 + c * 0.2);
-      this.scene.add(cue);
-    }
-
-    // 5. Feature Wall: Full-Wall "Built with Gemini 3.8 Flash" Urban Graffiti Mural (x = 6.5)
-    // Covers the ENTIRE far wall from floor (y = -0.76) to ceiling (y = 3.5), width 16m
-    const graffitiTex = createGeminiGraffitiTexture();
-    const rightWallGeo = new THREE.PlaneGeometry(16, 4.26);
-    const rightWallMat = new THREE.MeshPhongMaterial({
-      map: graffitiTex,
-      emissiveMap: graffitiTex,
-      emissive: new THREE.Color(0xffffff),
-      emissiveIntensity: 0.88,
-      specular: 0x111111,
-      shininess: 20,
-    });
-    const rightWall = new THREE.Mesh(rightWallGeo, rightWallMat);
-    rightWall.rotation.y = -Math.PI / 2;
-    rightWall.position.set(6.5, 1.37, 0);
-    this.scene.add(rightWall);
-
-    // Warm Architectural Ceiling Cove Light Strip (casts continuous warm wash down the wall)
-    const coveLightGeo = new THREE.BoxGeometry(0.08, 0.06, 15.8);
-    const coveLightMat = new THREE.MeshBasicMaterial({ color: 0xffedd5 });
-    const coveLight = new THREE.Mesh(coveLightGeo, coveLightMat);
-    coveLight.position.set(6.44, 3.46, 0);
-    this.scene.add(coveLight);
-
-    // Floor Perimeter Warm LED Accent Strip along base of the wall
-    const baseboardLedGeo = new THREE.BoxGeometry(0.06, 0.04, 15.8);
-    const baseboardLedMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
-    const baseboardLed = new THREE.Mesh(baseboardLedGeo, baseboardLedMat);
-    baseboardLed.position.set(6.44, floorY + 0.03, 0);
-    this.scene.add(baseboardLed);
-
-    // Architectural Perimeter Flanking Sconces on far left and right edges
-    const sconceBodyGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.42, 16);
-    const sconceBodyMat = new THREE.MeshStandardMaterial({
-      color: 0x18181b,
-      roughness: 0.3,
-      metalness: 0.8,
-    });
-    const sconceLensGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.04, 16);
-    const sconceLensMat = new THREE.MeshBasicMaterial({ color: 0xffedd5 });
-
-    for (const sz of [-6.2, 6.2]) {
-      const sconce = new THREE.Mesh(sconceBodyGeo, sconceBodyMat);
-      sconce.position.set(6.42, 1.8, sz);
-      this.scene.add(sconce);
-
-      const lensTop = new THREE.Mesh(sconceLensGeo, sconceLensMat);
-      lensTop.position.set(6.42, 2.02, sz);
-      this.scene.add(lensTop);
-
-      const lensBottom = new THREE.Mesh(sconceLensGeo, sconceLensMat);
-      lensBottom.position.set(6.42, 1.58, sz);
-      this.scene.add(lensBottom);
-
-      const sconceLight = new THREE.PointLight(0xffedd5, 1.4, 5.0);
-      sconceLight.position.set(6.32, 1.8, sz);
-      this.scene.add(sconceLight);
-    }
-
-    // 6. Modern Architectural Ceiling with Crown Molding Cornice (y = 3.5)
-    const ceilingGeo = new THREE.PlaneGeometry(22, 22);
-    const ceilingMat = new THREE.MeshPhongMaterial({
-      color: 0x181e28, // refined deep charcoal ceiling
-      specular: 0x000000,
-      shininess: 2,
-    });
-    const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
+    // 3. Ceiling
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(HALF_X * 2, HALF_Z * 2),
+      new THREE.MeshBasicMaterial({ color: 0x0a0c11 })
+    );
     ceiling.rotation.x = Math.PI / 2;
-    ceiling.position.y = 3.5;
+    ceiling.position.y = ceilingY;
     this.scene.add(ceiling);
 
-    // Architectural Perimeter Crown Molding (Cornice)
-    const corniceMat = new THREE.MeshStandardMaterial({
-      color: 0x141822,
-      roughness: 0.5,
-      metalness: 0.1,
-    });
-    for (const cx of [-6.46, 6.46]) {
-      const cornice = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 16.0), corniceMat);
-      cornice.position.set(cx, 3.46, 0);
-      this.scene.add(cornice);
-    }
-    for (const cz of [-5.46, 5.46]) {
-      const cornice = new THREE.Mesh(new THREE.BoxGeometry(24.0, 0.08, 0.08), corniceMat);
-      cornice.position.set(0, 3.46, cz);
-      this.scene.add(cornice);
-    }
-
-    // Recessed Ceiling LED Downlights (Trim rings and warm lenses)
-    const potTrimGeo = new THREE.RingGeometry(0.06, 0.085, 24);
-    const potTrimMat = new THREE.MeshStandardMaterial({
-      color: 0x27272a,
-      metalness: 0.8,
-      roughness: 0.25,
-      side: THREE.DoubleSide,
-    });
-    const potLensGeo = new THREE.CircleGeometry(0.06, 24);
-    const potLensMat = new THREE.MeshBasicMaterial({ color: 0xfffaed });
-
-    const potPositions = [
-      [-3.0, 3.49, -2.5], [0.0, 3.49, -2.5], [3.0, 3.49, -2.5],
-      [-3.0, 3.49, 2.5],  [0.0, 3.49, 2.5],  [3.0, 3.49, 2.5],
-    ];
-    for (const [px, py, pz] of potPositions) {
-      const ring = new THREE.Mesh(potTrimGeo, potTrimMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.set(px, py, pz);
-      this.scene.add(ring);
-
-      const lens = new THREE.Mesh(potLensGeo, potLensMat);
-      lens.rotation.x = Math.PI / 2;
-      lens.position.set(px, py - 0.001, pz);
-      this.scene.add(lens);
-    }
-
-    // 7. Tournament Heirloom 3-Shade Brass & British Racing Green Billiard Light Fixture
-    const brassMat = new THREE.MeshStandardMaterial({
-      color: 0xd4af37, // warm brushed heirloom brass
-      roughness: 0.20,
-      metalness: 0.90,
-    });
-    const shadeMat = new THREE.MeshStandardMaterial({
-      color: 0x0a2618, // classic dark British racing green enamel
-      roughness: 0.18,
-      metalness: 0.35,
-      side: THREE.DoubleSide,
-    });
-    const shadeLipMat = new THREE.MeshStandardMaterial({
-      color: 0xd4af37,
-      roughness: 0.18,
-      metalness: 0.92,
-    });
-
-    // Horizontal polished brass connecting crossbar
-    const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 2.0, 16), brassMat);
-    crossbar.rotation.z = Math.PI / 2;
-    crossbar.position.set(0, 2.15, 0);
-    this.scene.add(crossbar);
-
-    // Turned brass ball finials at ends of crossbar
-    for (const bx of [-1.02, 1.02]) {
-      const finial = new THREE.Mesh(new THREE.SphereGeometry(0.024, 16, 16), brassMat);
-      finial.position.set(bx, 2.15, 0);
-      this.scene.add(finial);
-    }
-
-    // Twin brass suspension chains rising to ceiling canopies
-    for (const cx of [-0.65, 0.65]) {
-      const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 1.34, 8), brassMat);
-      chain.position.set(cx, 2.82, 0);
-      this.scene.add(chain);
-
-      const canopy = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.03, 16), brassMat);
-      canopy.position.set(cx, 3.485, 0);
-      this.scene.add(canopy);
-    }
-
-    // 3 Billiard Cone Shades with polished brass lip trim rings & glowing diffusers
-    for (const lx of [-0.7, 0.0, 0.7]) {
-      // Shade socket mount
-      const socket = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.06, 16), brassMat);
-      socket.position.set(lx, 2.12, 0);
-      this.scene.add(socket);
-
-      // Flared cone shade
-      const shade = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.22, 28, 1, true), shadeMat);
-      shade.position.set(lx, 1.98, 0);
-      this.scene.add(shade);
-
-      // Polished brass rim lip ring around shade base
-      const lipRing = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.008, 12, 28), shadeLipMat);
-      lipRing.rotation.x = Math.PI / 2;
-      lipRing.position.set(lx, 1.87, 0);
-      this.scene.add(lipRing);
-
-      // Glowing interior warm diffuser disk
-      const glow = new THREE.Mesh(
-        new THREE.CircleGeometry(0.22, 16),
-        new THREE.MeshBasicMaterial({ color: 0xfffaed, side: THREE.DoubleSide })
+    // 4. Warm LED strips along the wall bases and a cool cove strip under the ceiling
+    const ledWarm = new THREE.MeshBasicMaterial({ color: 0xb8803f });
+    const ledCool = new THREE.MeshBasicMaterial({ color: 0x8fa3c4 });
+    const addStrip = (mat: THREE.Material, length: number, x: number, y: number, z: number, alongX: boolean) => {
+      const m = new THREE.Mesh(
+        new THREE.BoxGeometry(alongX ? length : 0.012, 0.012, alongX ? 0.012 : length),
+        mat
       );
-      glow.rotation.x = Math.PI / 2;
-      glow.position.set(lx, 1.89, 0);
-      this.scene.add(glow);
+      m.position.set(x, y, z);
+      this.scene.add(m);
+    };
+    for (const [mat, y] of [[ledWarm, floorY + 0.045], [ledCool, ceilingY - 0.06]] as const) {
+      addStrip(mat, HALF_X * 2, 0, y, -HALF_Z + 0.02, true);
+      addStrip(mat, HALF_X * 2, 0, y, HALF_Z - 0.02, true);
+      addStrip(mat, HALF_Z * 2, -HALF_X + 0.02, y, 0, false);
+      addStrip(mat, HALF_Z * 2, HALF_X - 0.02, y, 0, false);
     }
 
-    // 8. Luxury Lounge Props: Chesterfield Cognac Leather Club Armchair
-    const chairGroup = new THREE.Group();
-    chairGroup.position.set(-4.6, floorY, 3.4);
-    chairGroup.rotation.y = -Math.PI / 5; // angled warmly toward pool table
-
-    const leatherMat = new THREE.MeshStandardMaterial({
-      color: 0x78350f, // rich cognac saddle leather
-      roughness: 0.35,
-      metalness: 0.08,
-    });
-    const darkWoodLegMat = new THREE.MeshStandardMaterial({
-      color: 0x1f140e,
-      roughness: 0.4,
-    });
-
-    // Seat cushion
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.22, 0.85), leatherMat);
-    seat.position.set(0, 0.38, 0);
-    chairGroup.add(seat);
-
-    // Tufted backrest
-    const backrest = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.65, 0.22), leatherMat);
-    backrest.position.set(0, 0.72, -0.32);
-    chairGroup.add(backrest);
-
-    // Rolled arms
-    for (const ax of [-0.48, 0.48]) {
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.85, 16), leatherMat);
-      arm.rotation.x = Math.PI / 2;
-      arm.position.set(ax, 0.58, 0);
-      chairGroup.add(arm);
-    }
-
-    // Turned wooden feet
-    for (const fx of [-0.36, 0.36]) {
-      for (const fz of [-0.36, 0.36]) {
-        const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.02, 0.16, 12), darkWoodLegMat);
-        foot.position.set(fx, 0.08, fz);
-        chairGroup.add(foot);
-      }
-    }
-    this.scene.add(chairGroup);
-
-    // Cocktail drinks table next to armchair
-    const sideTableGroup = new THREE.Group();
-    sideTableGroup.position.set(-3.7, floorY, 3.8);
-
-    const marbleMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.15, metalness: 0.1 });
-    const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.03, 24), marbleMat);
-    tableTop.position.set(0, 0.55, 0);
-    sideTableGroup.add(tableTop);
-
-    const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.54, 16), brassMat);
-    pedestal.position.set(0, 0.27, 0);
-    sideTableGroup.add(pedestal);
-
-    const tableBase = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.20, 0.02, 24), brassMat);
-    tableBase.position.set(0, 0.01, 0);
-    sideTableGroup.add(tableBase);
-
-    // Crystal whiskey tumbler on table
-    const glassTumblerMat = new THREE.MeshPhysicalMaterial({
-      color: 0xffffff,
+    // 5. Venue signage on the two long walls
+    const signMat = new THREE.MeshBasicMaterial({
+      map: createSignTexture('POOL ARENA'),
       transparent: true,
-      opacity: 0.35,
-      roughness: 0.05,
-      clearcoat: 1.0,
       depthWrite: false,
     });
-    const tumbler = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.035, 0.09, 16), glassTumblerMat);
-    tumbler.position.set(0.05, 0.61, 0);
-    sideTableGroup.add(tumbler);
-    this.scene.add(sideTableGroup);
+    const signGeo = new THREE.PlaneGeometry(3.6, 0.9);
+    const signBack = new THREE.Mesh(signGeo, signMat);
+    signBack.position.set(0, 1.55, -HALF_Z + 0.015);
+    this.scene.add(signBack);
+    const signFront = new THREE.Mesh(signGeo, signMat);
+    signFront.position.set(0, 1.55, HALF_Z - 0.015);
+    signFront.rotation.y = Math.PI;
+    this.scene.add(signFront);
 
-    // Solid oak triangle ball rack hanging on wall near cue stand
-    const rackTriangleGroup = new THREE.Group();
-    rackTriangleGroup.position.set(-6.38, 1.45, -2.0);
-    rackTriangleGroup.rotation.y = Math.PI / 2;
-
-    const triangleWoodMat = new THREE.MeshStandardMaterial({ color: 0x452311, roughness: 0.35 });
-    const barLen = 0.34;
-    const barThick = 0.02;
-
-    for (let i = 0; i < 3; i++) {
-      const angle = (i * 2 * Math.PI) / 3;
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(barLen, barThick, barThick), triangleWoodMat);
-      bar.position.set(Math.cos(angle) * 0.09, Math.sin(angle) * 0.09, 0);
-      bar.rotation.z = angle + Math.PI / 2;
-      rackTriangleGroup.add(bar);
+    // 6. Wall-mounted cue rack with house cues
+    const darkWood = new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.45, metalness: 0.05 });
+    const rackGroup = new THREE.Group();
+    rackGroup.position.set(-HALF_X + 0.05, 0, -1.6);
+    const backplate = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.35, 0.95), darkWood);
+    backplate.position.set(0, 0.95, 0);
+    rackGroup.add(backplate);
+    for (const y of [0.42, 1.42]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 1.0), darkWood);
+      rail.position.set(0.04, y, 0);
+      rackGroup.add(rail);
     }
-    this.scene.add(rackTriangleGroup);
+    const houseCueGeo = new THREE.CylinderGeometry(0.0065, 0.0135, 1.3, 12);
+    const houseCueMat = new THREE.MeshStandardMaterial({ color: 0xd9c39a, roughness: 0.4 });
+    for (let c = 0; c < 6; c++) {
+      const cue = new THREE.Mesh(houseCueGeo, houseCueMat);
+      cue.position.set(0.04, 0.95, -0.4 + c * 0.16);
+      rackGroup.add(cue);
+    }
+    this.scene.add(rackGroup);
 
-    // Blue Master Chalk Cubes
+    // 7. Tournament overhead fixture: slim black housing, long opal diffuser, steel suspension
+    const fixture = new THREE.Group();
+    this.lampFixture = fixture;
+    const housing = new THREE.Mesh(
+      new THREE.BoxGeometry(2.1, 0.09, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.38, metalness: 0.55 })
+    );
+    housing.position.set(0, 1.97, 0);
+    fixture.add(housing);
+    const diffuser = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.02, 0.42),
+      new THREE.MeshBasicMaterial({ color: 0xfff6e4 })
+    );
+    diffuser.rotation.x = Math.PI / 2;
+    diffuser.position.set(0, 1.924, 0);
+    fixture.add(diffuser);
+    const wireMat = new THREE.MeshStandardMaterial({ color: 0x9aa1ab, roughness: 0.3, metalness: 0.9 });
+    const wireLen = ceilingY - 2.0;
+    for (const wx of [-0.8, 0.8]) {
+      const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, wireLen, 6), wireMat);
+      wire.position.set(wx, 2.0 + wireLen / 2, 0);
+      fixture.add(wire);
+    }
+    this.scene.add(fixture);
+
+    // 8. Blue chalk cube resting on the table's corner rail
     const chalkMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.65 });
     const chalkHollowMat = new THREE.MeshStandardMaterial({ color: 0x93c5fd, roughness: 0.95 });
-
-    const createChalkCube = (x: number, y: number, z: number, rotY = 0) => {
-      const cg = new THREE.Group();
-      cg.position.set(x, y, z);
-      cg.rotation.y = rotY;
-
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.022, 0.024), chalkMat);
-      cg.add(body);
-
-      const divot = new THREE.Mesh(new THREE.CircleGeometry(0.007, 16), chalkHollowMat);
-      divot.rotation.x = -Math.PI / 2;
-      divot.position.set(0, 0.0115, 0);
-      cg.add(divot);
-
-      return cg;
-    };
-
-    // One chalk cube resting on table corner rail
-    this.scene.add(createChalkCube(1.28, 0.048 + 0.012, 0.66, 0.35));
-    // One chalk cube resting on wall cue stand shelf
-    this.scene.add(createChalkCube(-6.38, 0.13, -2.5, 0.12));
+    const chalk = new THREE.Group();
+    chalk.position.set(1.28, 0.048 + 0.012, 0.66);
+    chalk.rotation.y = 0.35;
+    chalk.add(new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.022, 0.024), chalkMat));
+    const divot = new THREE.Mesh(new THREE.CircleGeometry(0.007, 16), chalkHollowMat);
+    divot.rotation.x = -Math.PI / 2;
+    divot.position.set(0, 0.0115, 0);
+    chalk.add(divot);
+    this.scene.add(chalk);
   }
 
   private buildPoolTable() {
@@ -761,8 +431,9 @@ export class PoolGameRenderer {
     const feltTexture = createFeltTexture();
     const feltMat = new THREE.MeshStandardMaterial({
       map: feltTexture,
-      roughness: 0.76,
+      roughness: 0.92,
       metalness: 0.0,
+      envMapIntensity: 0.3,
     });
     const bedGeo = new THREE.PlaneGeometry(L + cushionDepth * 2, W + cushionDepth * 2);
     const bedMesh = new THREE.Mesh(bedGeo, feltMat);
@@ -887,6 +558,8 @@ export class PoolGameRenderer {
       polygonOffsetUnits: -1,
     });
 
+    const leatherMat = new THREE.MeshStandardMaterial({ color: 0x1d130d, roughness: 0.55, metalness: 0.05 });
+
     for (const pocket of POCKETS) {
       // 1. Dark circular pocket mouth disc sitting solidly on the cloth
       const holeDisc = new THREE.Mesh(
@@ -896,6 +569,15 @@ export class PoolGameRenderer {
       holeDisc.rotation.x = -Math.PI / 2;
       holeDisc.position.set(pocket.position.x, 0.0006, pocket.position.z);
       this.scene.add(holeDisc);
+
+      // Stitched leather pocket liner ringing the mouth
+      const liner = new THREE.Mesh(
+        new THREE.TorusGeometry(pocket.radius * 0.98, 0.0065, 8, 32),
+        leatherMat
+      );
+      liner.rotation.x = -Math.PI / 2;
+      liner.position.set(pocket.position.x, 0.004, pocket.position.z);
+      this.scene.add(liner);
 
       // 2. Open-ended interior drop cup (no top cap to avoid coplanar Z-fighting)
       const cupMesh = new THREE.Mesh(
@@ -943,7 +625,40 @@ export class PoolGameRenderer {
       }
     }
 
-    // 6. Regulation Table Cloth Markings (Headstring / Baulk line, "D" arc, and Spot markers)
+    // Soft contact occlusion where the cloth meets the cushion rubber (the spot-light shadow can't produce this)
+    const aoCanvas = document.createElement('canvas');
+    aoCanvas.width = 4;
+    aoCanvas.height = 64;
+    const aoCtx = aoCanvas.getContext('2d')!;
+    const aoGrad = aoCtx.createLinearGradient(0, 0, 0, 64);
+    aoGrad.addColorStop(0, 'rgba(0,0,0,0.42)');
+    aoGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    aoCtx.fillStyle = aoGrad;
+    aoCtx.fillRect(0, 0, 4, 64);
+    const aoTex = new THREE.CanvasTexture(aoCanvas);
+    const aoMat = new THREE.MeshBasicMaterial({
+      map: aoTex,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    const aoWidth = 0.07;
+    const addAo = (length: number, x: number, z: number, rotZ: number) => {
+      const strip = new THREE.Mesh(new THREE.PlaneGeometry(length, aoWidth), aoMat);
+      strip.rotation.x = -Math.PI / 2;
+      strip.rotation.z = rotZ;
+      strip.position.set(x, 0.0005, z);
+      this.scene.add(strip);
+    };
+    // Gradient runs from the cushion (dark) inward; planes are oriented so the texture's top edge is the cushion side
+    addAo(L, 0, -W / 2 + aoWidth / 2, 0);
+    addAo(L, 0, W / 2 - aoWidth / 2, Math.PI);
+    addAo(W, -L / 2 + aoWidth / 2, 0, Math.PI / 2);
+    addAo(W, L / 2 - aoWidth / 2, 0, -Math.PI / 2);
+
+    // 6. Regulation 8-ball cloth markings: head string and head / centre / foot spots
     const markingMat = new THREE.MeshBasicMaterial({
       color: 0xf8fafc,
       transparent: true,
@@ -961,22 +676,6 @@ export class PoolGameRenderer {
     baulkLine.rotation.x = -Math.PI / 2;
     baulkLine.position.set(-L * 0.25, 0.0004, 0);
     markingsGroup.add(baulkLine);
-
-    // The "D" arc: semi-circle curving into the baulk/kitchen area (radius 0.29m ~ 11.5 inches)
-    const dRadius = 0.29;
-    const dLineWidth = 0.003;
-    const dArcGeo = new THREE.RingGeometry(
-      dRadius - dLineWidth / 2,
-      dRadius + dLineWidth / 2,
-      64,
-      1,
-      Math.PI * 0.5,
-      Math.PI
-    );
-    const dArc = new THREE.Mesh(dArcGeo, markingMat);
-    dArc.rotation.x = -Math.PI / 2;
-    dArc.position.set(-L * 0.25, 0.0004, 0);
-    markingsGroup.add(dArc);
 
     // Head Spot (center of the headstring / baulk line where cue ball breaks from)
     const headSpot = new THREE.Mesh(new THREE.CircleGeometry(0.006, 24), markingMat);
@@ -1014,10 +713,10 @@ export class PoolGameRenderer {
       leg.receiveShadow = false;
       this.scene.add(leg);
 
-      // Brass foot pad on each leg base
+      // Black steel leveller foot on each leg base
       const footPad = new THREE.Mesh(
         new THREE.CylinderGeometry(0.075, 0.085, 0.025, 20),
-        new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.85, roughness: 0.25 })
+        new THREE.MeshStandardMaterial({ color: 0x1c1d21, metalness: 0.85, roughness: 0.35 })
       );
       footPad.position.set(pos.x, -TABLE_CONSTANTS.TABLE_HEIGHT + 0.0125, pos.z);
       footPad.castShadow = true;
@@ -1559,6 +1258,8 @@ export class PoolGameRenderer {
     const aspect = this.camera.aspect;
     const isPortrait = aspect < 1.0;
 
+    if (this.lampFixture) this.lampFixture.visible = this.cameraMode !== 'overhead';
+
     if (this.cameraMode === 'overhead') {
       // Tactical top-down view: in portrait, scale height so entire table length fits on screen
       const baseHeight = 3.2;
@@ -1718,6 +1419,7 @@ export class PoolGameRenderer {
     textures.forEach(t => t.dispose());
     (this.scene.environment as THREE.Texture | null)?.dispose();
 
+    this.vignette?.remove();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     if (this.renderer.domElement.parentElement) {

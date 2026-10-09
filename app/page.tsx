@@ -21,11 +21,16 @@ export default function HomePage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-neutral-950 flex flex-col text-white selection:bg-emerald-500 selection:text-black">
+    <div className="relative min-h-screen bg-neutral-950 flex flex-col text-white selection:bg-emerald-500 selection:text-black overflow-hidden">
+      {/* Pendant-lamp glow over the felt, echoing the in-game lighting */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_65%_45%_at_50%_0%,rgba(255,226,170,0.14),transparent_70%),radial-gradient(ellipse_80%_45%_at_50%_100%,rgba(16,120,80,0.20),transparent_72%)]"
+      />
       <NavigationHeader />
 
       {/* Hero Section */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-12 sm:py-20 flex flex-col items-center text-center">
+      <main className="relative flex-1 max-w-6xl w-full mx-auto px-4 py-12 sm:py-20 flex flex-col items-center text-center">
         {/* Subtle pill tag */}
         <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold mb-6 shadow-inner">
           <Sparkles className="w-3.5 h-3.5" />
@@ -34,7 +39,7 @@ export default function HomePage() {
 
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-black tracking-tight max-w-4xl leading-tight">
           Master the Table in <br className="hidden sm:inline" />
-          <span className="bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">
+          <span className="bg-gradient-to-r from-emerald-300 via-emerald-200 to-amber-200 bg-clip-text text-transparent">
             3D Pool Arena
           </span>
         </h1>
@@ -47,7 +52,7 @@ export default function HomePage() {
         <div className="mt-10 sm:mt-12 flex flex-col sm:flex-row items-center justify-center gap-3.5 w-full max-w-xl">
           <Link
             href="/online"
-            className="group relative w-full sm:w-auto flex-1 p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-cyan-600 via-teal-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-white font-extrabold text-base shadow-2xl shadow-cyan-600/30 transition-all duration-300 flex items-center justify-center space-x-3 border border-cyan-400/40 hover:scale-[1.02]"
+            className="group relative w-full sm:w-auto flex-1 p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-emerald-800 to-emerald-600 hover:from-emerald-700 hover:to-emerald-500 text-white font-extrabold text-base shadow-2xl shadow-emerald-900/50 transition-all duration-300 flex items-center justify-center space-x-3 border border-amber-200/30 hover:scale-[1.02]"
           >
             <Users className="w-5 h-5" />
             <span>Play with a Friend</span>
@@ -83,7 +88,7 @@ export default function HomePage() {
           </div>
 
           <div className="p-6 rounded-3xl bg-neutral-900/50 border border-neutral-800 backdrop-blur-md">
-            <div className="w-10 h-10 rounded-xl bg-teal-500/20 text-teal-400 flex items-center justify-center mb-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-300/15 text-amber-200 flex items-center justify-center mb-3">
               <Shield className="w-5 h-5" />
             </div>
             <h3 className="text-base font-bold text-white">Full WPA 8-Ball Rules</h3>
@@ -93,7 +98,7 @@ export default function HomePage() {
           </div>
 
           <div className="p-6 rounded-3xl bg-neutral-900/50 border border-neutral-800 backdrop-blur-md">
-            <div className="w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center mb-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-400/15 text-emerald-300 flex items-center justify-center mb-3">
               <Sparkles className="w-5 h-5" />
             </div>
             <h3 className="text-base font-bold text-white">Photorealistic 3D Visuals</h3>
