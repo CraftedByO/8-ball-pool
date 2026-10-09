@@ -73,3 +73,27 @@ All 19 automated tests covering physics integration, WPA 8-ball rules, AI bot sh
 npm run build
 npm start
 ```
+
+---
+
+## Docker & Deployment
+
+The app ships as a single provider-agnostic container (Next.js `standalone` output, non-root, listens on `$PORT`, default `8080`).
+
+```bash
+cp .env.example .env            # fill in Firebase values (optional)
+docker compose up --build       # http://localhost:8080
+```
+
+Or without compose:
+
+```bash
+docker build -t eight-ball-pool \
+  --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=... \
+  --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID=... .   # plus the other NEXT_PUBLIC_FIREBASE_* args
+docker run -p 8080:8080 eight-ball-pool
+```
+
+**Note:** `NEXT_PUBLIC_*` variables are inlined at build time, so they must be passed as `--build-arg`s, not runtime env vars. Build one image per Firebase environment.
+
+Push the image to any registry (Docker Hub, GHCR, ECR, Artifact Registry, ACR) and run it on anything that runs containers: Cloud Run, AWS ECS/App Runner, Azure Container Apps, Fly.io, Kubernetes, or a VM with Docker. The app is stateless (state lives in Firebase), so it scales horizontally. `cloudbuild.yaml` is an optional Google Cloud Build → Cloud Run pipeline.
