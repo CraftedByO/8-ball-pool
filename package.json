@@ -7,29 +7,41 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:vinext": "vite dev --port 3001",
+    "build:vinext": "VINEXT_CLOUDFLARE=1 vite build",
+    "start:vinext": "vite preview",
+    "deploy:vinext": "vinext-cloudflare deploy"
   },
   "dependencies": {
+    "@vinext/cloudflare": "^1.1.0",
     "canvas-confetti": "^1.9.4",
     "firebase": "^12.19.0",
     "lucide-react": "^1.46.0",
     "next": "16.3.5",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "three": "^0.186.0"
+    "react-server-dom-webpack": "^19.3.0",
+    "three": "^0.186.0",
+    "vinext": "^1.1.0"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^2.0.0-beta.sha-91c870c02",
     "@tailwindcss/postcss": "^4",
     "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^22.20.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "@vitejs/plugin-rsc": "^0.5.36",
+    "cf": "^1.0.0-beta.13",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vite": "^8.3.0",
     "vitest": "^5.0.1"
-  }
+  },
+  "type": "module"
 }
