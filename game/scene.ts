@@ -260,17 +260,19 @@ export class PoolGameRenderer {
 
     // 1. Warm herringbone hardwood parquet floor with authentic micro-bevel bump relief
     const floorGeo = new THREE.PlaneGeometry(22, 22);
-    const floorMat = new THREE.MeshStandardMaterial({
+    // Large room surfaces use Phong rather than full PBR: they cover most of the screen,
+    // and Phong keeps the polished-floor highlight at roughly half the per-pixel cost on integrated GPUs.
+    const floorMat = new THREE.MeshPhongMaterial({
       map: createHardwoodFloorTexture(),
       bumpMap: createHardwoodBumpTexture(),
       bumpScale: 0.005,
-      roughness: 0.32,
-      metalness: 0.04,
+      specular: 0x2e2a26,
+      shininess: 70,
     });
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = floorY;
-    floor.receiveShadow = true;
+    // No shadow sampling: the table's shadow falls beneath the table where it can't be seen
     this.scene.add(floor);
 
     // Architectural Molded Perimeter Baseboards (Skirting Boards)
@@ -308,15 +310,14 @@ export class PoolGameRenderer {
 
     // 2. Luxury geometric designer area rug centered directly under pool table
     const rugGeo = new THREE.PlaneGeometry(4.8, 3.5);
-    const rugMat = new THREE.MeshStandardMaterial({
+    const rugMat = new THREE.MeshPhongMaterial({
       map: createRugTexture(),
-      roughness: 0.85,
-      metalness: 0.02,
+      specular: 0x050505,
+      shininess: 6,
     });
     const rug = new THREE.Mesh(rugGeo, rugMat);
     rug.rotation.x = -Math.PI / 2;
     rug.position.set(0, floorY + 0.002, 0); // slightly above floor to prevent z-fighting
-    rug.receiveShadow = true;
     this.scene.add(rug);
 
     // 3. Panoramic floor-to-ceiling skyline window wall (Background, z = -5.5)
@@ -367,9 +368,10 @@ export class PoolGameRenderer {
 
     // 4. Left Wall: Modern Walnut Wood Slats & Framed Fine Art Gallery (x = -6.5)
     const leftWallGeo = new THREE.PlaneGeometry(16, 6.5);
-    const leftWallMat = new THREE.MeshStandardMaterial({
+    const leftWallMat = new THREE.MeshPhongMaterial({
       color: 0x27272a, // dark charcoal plaster
-      roughness: 0.85,
+      specular: 0x000000,
+      shininess: 4,
     });
     const leftWall = new THREE.Mesh(leftWallGeo, leftWallMat);
     leftWall.rotation.y = Math.PI / 2;
@@ -449,13 +451,13 @@ export class PoolGameRenderer {
     // Covers the ENTIRE far wall from floor (y = -0.76) to ceiling (y = 3.5), width 16m
     const graffitiTex = createGeminiGraffitiTexture();
     const rightWallGeo = new THREE.PlaneGeometry(16, 4.26);
-    const rightWallMat = new THREE.MeshStandardMaterial({
+    const rightWallMat = new THREE.MeshPhongMaterial({
       map: graffitiTex,
       emissiveMap: graffitiTex,
       emissive: new THREE.Color(0xffffff),
       emissiveIntensity: 0.88,
-      roughness: 0.45,
-      metalness: 0.05,
+      specular: 0x111111,
+      shininess: 20,
     });
     const rightWall = new THREE.Mesh(rightWallGeo, rightWallMat);
     rightWall.rotation.y = -Math.PI / 2;
@@ -506,9 +508,10 @@ export class PoolGameRenderer {
 
     // 6. Modern Architectural Ceiling with Crown Molding Cornice (y = 3.5)
     const ceilingGeo = new THREE.PlaneGeometry(22, 22);
-    const ceilingMat = new THREE.MeshStandardMaterial({
+    const ceilingMat = new THREE.MeshPhongMaterial({
       color: 0x181e28, // refined deep charcoal ceiling
-      roughness: 0.92,
+      specular: 0x000000,
+      shininess: 2,
     });
     const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
     ceiling.rotation.x = Math.PI / 2;
