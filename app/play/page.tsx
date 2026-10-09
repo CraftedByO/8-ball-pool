@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { PoolGameRenderer } from '../../game/scene';
+import { PoolGameRenderer, captureBallPoses, BallPoseStore } from '../../game/scene';
 import { BilliardsPhysicsEngine } from '../../physics/engine';
 import {
   createStandard8BallRack,
@@ -39,17 +39,15 @@ export default function SinglePlayerGame() {
   const [difficulty, setDifficulty] = useState<AIDifficulty>('medium');
   const [gameStarted, setGameStarted] = useState<boolean>(false);
   const [rulesState, setRulesState] = useState<RulesState>(() => rulesRef.current.getState());
-  const [aimAngle, setAimAngle] = useState<number>(0);
   const [power, setPower] = useState<number>(0.5);
   const aimAngleRef = useRef<number>(0);
   const powerRef = useRef<number>(0.5);
 
+  // Aim lives only in a ref: the render loop reads it every frame, so dragging the cue
+  // never needs to re-render the React tree (that was a re-render per pointer event).
   const updateAimAngle = useCallback((valOrFn: number | ((prev: number) => number)) => {
-    setAimAngle(prev => {
-      const next = typeof valOrFn === 'function' ? valOrFn(prev) : valOrFn;
-      aimAngleRef.current = next;
-      return next;
-    });
+    const prev = aimAngleRef.current;
+    aimAngleRef.current = typeof valOrFn === 'function' ? valOrFn(prev) : valOrFn;
   }, []);
 
   const updatePower = useCallback((valOrFn: number | ((prev: number) => number)) => {
@@ -101,10 +99,11 @@ export default function SinglePlayerGame() {
 
     renderer.updateBalls(physics.getBalls());
 
-    // Main animation & physics loop
-    let animId: number;
+    // Main game loop: driven by the renderer's single rAF so state updates and drawing share one frame
     let lastTime = performance.now();
     let accumulator = 0;
+    const prevPoses: BallPoseStore = new Map();
+    captureBallPoses(physics.getBalls(), prevPoses);
 
     const loop = () => {
       if (physicsRef.current && rendererRef.current) {
@@ -123,6 +122,7 @@ export default function SinglePlayerGame() {
         while (accumulator >= TABLE_CONSTANTS.FIXED_TIMESTEP) {
           if (physics.isMoving()) {
             movedInThisFrame = true;
+            captureBallPoses(physics.getBalls(), prevPoses);
             const snapshot = physics.step(TABLE_CONSTANTS.FIXED_TIMESTEP);
 
             // Audio triggers
@@ -138,7 +138,8 @@ export default function SinglePlayerGame() {
         }
 
         if (movedInThisFrame || physics.isMoving()) {
-          renderer.updateBalls(physics.getBalls());
+          // Interpolate between the last two fixed steps so motion doesn't judder
+          renderer.updateBalls(physics.getBalls(), prevPoses, accumulator / TABLE_CONSTANTS.FIXED_TIMESTEP);
           renderer.updateCueStick(physics.getCueBall(), currentAimAngle, 0, false);
           renderer.updateTrajectory(null, false);
           renderer.updateBallInHandGuide(false);
@@ -176,13 +177,11 @@ export default function SinglePlayerGame() {
           renderer.updateCamera(cueBall, currentAimAngle, rulesState.isBallInHand && isHumanTurn);
         }
       }
-      animId = requestAnimationFrame(loop);
     };
 
-    animId = requestAnimationFrame(loop);
+    renderer.onFrame = loop;
 
     return () => {
-      cancelAnimationFrame(animId);
       renderer.dispose();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -312,7 +311,7 @@ export default function SinglePlayerGame() {
     setIsShooting(true);
     shotEventsRef.current = [];
     soundFX.playCueStrike(power);
-    physics.strikeCueBall({ power, angle: aimAngle, spinX, spinY });
+    physics.strikeCueBall({ power, angle: aimAngleRef.current, spinX, spinY });
 
     const checkRestInterval = setInterval(() => {
       if (!physics.isMoving()) {
@@ -371,7 +370,7 @@ export default function SinglePlayerGame() {
         }
       }
     }, 100);
-  }, [aimAngle, power, spinX, spinY, isShooting, profile, difficulty, triggerAiTurn]);
+  }, [power, spinX, spinY, isShooting, profile, difficulty, triggerAiTurn]);
 
   // Ball-in-Hand Interactive Placement Logic
   const moveCueBallTo = useCallback((clientX: number, clientY: number) => {

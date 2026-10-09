@@ -129,10 +129,27 @@ export class PoolGameRenderer {
   private container: HTMLElement;
   private animationFrameId: number | null = null;
 
+  /** Called once per animation frame, right before rendering, so game state is never a frame behind. */
+  public onFrame: ((nowMs: number) => void) | null = null;
+
+  // Adaptive resolution: trade pixel density for a steady frame rate on weak GPUs
+  private readonly maxPixelRatio: number;
+  private pixelRatio: number;
+  private lastFrameTs = 0;
+  private perfFrames = 0;
+  private perfTimeMs = 0;
+  private stableMs = 0;
+  private bannedRatio = Infinity;
+  private bannedUntil = 0;
+  private shadowDirty = true;
+  private maxAnisotropy = 1;
+  private sharedBallGeometry: THREE.SphereGeometry | null = null;
+
   // Camera views
   public cameraMode: 'player' | 'top_down' | 'overhead' = 'player';
   private targetCameraPos = new THREE.Vector3();
   private targetCameraLookAt = new THREE.Vector3();
+  private cameraLerp = 0.08; // per-frame factor, refreshed from the real frame time every frame
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -151,11 +168,16 @@ export class PoolGameRenderer {
 
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    this.pixelRatio = Math.min(this.maxPixelRatio, 1.5);
+    this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // Shadows only re-render when a ball actually moved (see markShadowsDirty)
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
     container.appendChild(this.renderer.domElement);
@@ -165,6 +187,7 @@ export class PoolGameRenderer {
     this.setupLighting();
     this.buildBilliardsRoom();
     this.buildPoolTable();
+    this.applyTextureQuality();
     this.buildCueStick();
     this.buildTrajectoryVisualizer();
     this.buildBallInHandGuide();
@@ -195,68 +218,41 @@ export class PoolGameRenderer {
   }
 
   private setupLighting() {
-    // 1. Warm ambient architectural fill light — brightens room so background walls are vivid and welcoming
-    const ambientLight = new THREE.AmbientLight(0xfff7ed, 0.64);
+    // Every light costs every lit fragment, so the rig is deliberately small:
+    // ambient + hemisphere fill, three pendant lamps (only the centre one casts a shadow).
+    // The far wall is emissive and the PMREM environment map provides the rest of the room's ambience.
+    const ambientLight = new THREE.AmbientLight(0xfff7ed, 0.78);
     this.scene.add(ambientLight);
 
-    // 2. Hemisphere fill: soft luminous daylight sky from above, warm honey timber bounce from below
-    const hemiLight = new THREE.HemisphereLight(0xc7d2fe, 0x78350f, 0.46);
+    const hemiLight = new THREE.HemisphereLight(0xc7d2fe, 0x78350f, 0.62);
     this.scene.add(hemiLight);
 
-    // 3. Billiard overhead tournament 3-shade pendant fixture (seamless table illumination)
-    for (const lx of [-0.7, 0.0, 0.7]) {
-      const lamp = new THREE.SpotLight(0xfffaed, 3.6);
+    // Billiard overhead tournament 3-shade pendant fixture
+    const lamps: Array<{ x: number; intensity: number; shadow: boolean }> = [
+      { x: 0.0, intensity: 6.6, shadow: true },
+      { x: -0.7, intensity: 2.1, shadow: false },
+      { x: 0.7, intensity: 2.1, shadow: false },
+    ];
+    for (const { x: lx, intensity, shadow } of lamps) {
+      const lamp = new THREE.SpotLight(0xfffaed, intensity);
       lamp.position.set(lx, 1.85, 0);
       lamp.target.position.set(lx, 0, 0);
       lamp.angle = Math.PI / 3.4;
       lamp.penumbra = 0.40;
-      lamp.castShadow = true;
-      lamp.shadow.mapSize.width = 2048;
-      lamp.shadow.mapSize.height = 2048;
-      lamp.shadow.camera.near = 0.5;
-      lamp.shadow.camera.far = 3.5;
-      lamp.shadow.bias = -0.00008;
-      lamp.shadow.normalBias = 0.005;
-      lamp.shadow.radius = 1.6;
+      if (shadow) {
+        lamp.castShadow = true;
+        lamp.shadow.mapSize.set(2048, 2048);
+        lamp.shadow.camera.near = 0.5;
+        lamp.shadow.camera.far = 3.5;
+        // Tighten the shadow frustum around the table: ~35% more texels per ball => crisper shadows
+        lamp.shadow.focus = 0.8;
+        lamp.shadow.bias = -0.00008;
+        lamp.shadow.normalBias = 0.004;
+        lamp.shadow.radius = 2.0;
+      }
       this.scene.add(lamp);
       this.scene.add(lamp.target);
     }
-
-    // 4. Feature Wall Architectural Wash Floodlights (bathing x = 6.5 wall in warm 3200K gallery light)
-    const wallWash1 = new THREE.SpotLight(0xffedd5, 4.5, 9.0, Math.PI / 2.8, 0.55);
-    wallWash1.position.set(3.8, 2.8, -2.2);
-    wallWash1.target.position.set(6.5, 1.4, -2.2);
-    this.scene.add(wallWash1);
-    this.scene.add(wallWash1.target);
-
-    const wallWash2 = new THREE.SpotLight(0xffedd5, 4.5, 9.0, Math.PI / 2.8, 0.55);
-    wallWash2.position.set(3.8, 2.8, 2.2);
-    wallWash2.target.position.set(6.5, 1.4, 2.2);
-    this.scene.add(wallWash2);
-    this.scene.add(wallWash2.target);
-
-    // 5. Electric Neon Ambient Point Lights flanking the Gemini graffiti mural at eye level
-    const cyanNeonLight = new THREE.PointLight(0x06b6d4, 2.4, 6.0);
-    cyanNeonLight.position.set(6.0, 1.4, -2.6);
-    this.scene.add(cyanNeonLight);
-
-    const magentaNeonLight = new THREE.PointLight(0xec4899, 2.4, 6.0);
-    magentaNeonLight.position.set(6.0, 1.4, 2.6);
-    this.scene.add(magentaNeonLight);
-
-    const goldCoreLight = new THREE.PointLight(0xfbbf24, 1.8, 5.0);
-    goldCoreLight.position.set(6.0, 1.6, 0);
-    this.scene.add(goldCoreLight);
-
-    // 6. Floor Perimeter Warm Ambient Glow along wall base
-    const floorBaseGlow = new THREE.PointLight(0xf59e0b, 1.8, 4.0);
-    floorBaseGlow.position.set(5.9, -TABLE_CONSTANTS.TABLE_HEIGHT + 0.15, 0);
-    this.scene.add(floorBaseGlow);
-
-    // 7. Left wall art gallery light
-    const artLight = new THREE.PointLight(0xfef08a, 1.5, 8);
-    artLight.position.set(-5.0, 1.8, 0);
-    this.scene.add(artLight);
   }
 
   private buildBilliardsRoom() {
@@ -335,12 +331,12 @@ export class PoolGameRenderer {
 
     // B. Floor-to-ceiling glass window pane
     const glassGeo = new THREE.PlaneGeometry(24, 6.5);
-    const glassMat = new THREE.MeshStandardMaterial({
+    // Unlit tint: a lit transparent pane covering the whole backdrop was a full-screen blend through every light
+    const glassMat = new THREE.MeshBasicMaterial({
       color: 0x93c5fd,
-      roughness: 0.08,
-      metalness: 0.2,
       transparent: true,
-      opacity: 0.16,
+      opacity: 0.10,
+      depthWrite: false,
     });
     const glassWall = new THREE.Mesh(glassGeo, glassMat);
     glassWall.position.set(0, 1.8, -5.5);
@@ -697,10 +693,10 @@ export class PoolGameRenderer {
     const glassTumblerMat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.35,
       roughness: 0.05,
-      transmission: 0.9,
-      ior: 1.5,
+      clearcoat: 1.0,
+      depthWrite: false,
     });
     const tumbler = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.035, 0.09, 16), glassTumblerMat);
     tumbler.position.set(0.05, 0.61, 0);
@@ -849,8 +845,7 @@ export class PoolGameRenderer {
       metalness: 0.25,
       clearcoat: 1.0,
       clearcoatRoughness: 0.06,
-      iridescence: 0.9,
-      iridescenceIOR: 1.33,
+      emissive: 0x1e293b,
     });
 
     const createDiamondSight = (x: number, y: number, z: number) => {
@@ -1129,12 +1124,8 @@ export class PoolGameRenderer {
       gapSize: 0.015,
       linewidth: 2,
     });
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, 0),
-    ]);
-    this.trajectoryLine = new THREE.Line(lineGeo, lineMat);
-    this.trajectoryLine.computeLineDistances();
+    this.trajectoryLine = new THREE.Line(createDynamicLineGeometry(), lineMat);
+    this.trajectoryLine.frustumCulled = false;
     this.scene.add(this.trajectoryLine);
 
     // 2. Deflected target ball line (luminous electric cyan)
@@ -1143,11 +1134,8 @@ export class PoolGameRenderer {
       dashSize: 0.03,
       gapSize: 0.015,
     });
-    const targetLineGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, 0),
-    ]);
-    this.targetBallLine = new THREE.Line(targetLineGeo, targetLineMat);
+    this.targetBallLine = new THREE.Line(createDynamicLineGeometry(), targetLineMat);
+    this.targetBallLine.frustumCulled = false;
     this.scene.add(this.targetBallLine);
 
     // 3. Cue ball deflection or cushion rebound line (warm gold)
@@ -1156,11 +1144,8 @@ export class PoolGameRenderer {
       dashSize: 0.025,
       gapSize: 0.015,
     });
-    const reflectLineGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, 0),
-    ]);
-    this.cueReflectLine = new THREE.Line(reflectLineGeo, reflectLineMat);
+    this.cueReflectLine = new THREE.Line(createDynamicLineGeometry(), reflectLineMat);
+    this.cueReflectLine.frustumCulled = false;
     this.scene.add(this.cueReflectLine);
 
     // 4. Ghost ball sleek contact indicator (outer luminous ring + inner translucent disc + 3D holographic volume sphere)
@@ -1196,16 +1181,15 @@ export class PoolGameRenderer {
 
     // 3D Holographic Cue Ball Sphere (eliminates perspective parallax against 3D spherical balls)
     const sphereGeo = new THREE.SphereGeometry(R, 32, 24);
-    const sphereMat = new THREE.MeshPhysicalMaterial({
+    // Plain translucency: MeshPhysicalMaterial.transmission would force an extra full-scene render pass every frame
+    const sphereMat = new THREE.MeshStandardMaterial({
       color: 0xe0f2fe,
-      transmission: 0.70,
-      opacity: 0.50,
+      emissive: 0x38bdf8,
+      emissiveIntensity: 0.25,
+      opacity: 0.38,
       transparent: true,
       roughness: 0.15,
       metalness: 0.05,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.1,
-      ior: 1.45,
       depthWrite: false,
     });
     const sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
@@ -1310,31 +1294,33 @@ export class PoolGameRenderer {
     const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
 
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
-
-    const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    const target = new THREE.Vector3();
-    const hit = raycaster.ray.intersectPlane(tablePlane, target);
+    _raycaster.setFromCamera(_ndc.set(ndcX, ndcY), this.camera);
+    const hit = _raycaster.ray.intersectPlane(_tablePlane, _target);
     if (hit) {
-      return { x: target.x, z: target.z };
+      return { x: _target.x, z: _target.z };
     }
     return null;
   }
 
   /**
-   * Synchronize 3D meshes with physics ball states
+   * Synchronize 3D meshes with physics ball states.
+   * When `prev` and `alpha` are given, positions are interpolated between the previous and the
+   * latest fixed physics step so motion stays smooth when the display and physics rates differ.
    */
-  public updateBalls(balls: BallPhysicsState[]) {
+  public updateBalls(balls: BallPhysicsState[], prev?: BallPoseStore, alpha: number = 1) {
     const R = TABLE_CONSTANTS.BALL_RADIUS;
+
+    if (!this.sharedBallGeometry) {
+      // One shared 40x28 sphere: ~2.2k tris/ball instead of 6.1k, visually identical at ball size
+      this.sharedBallGeometry = new THREE.SphereGeometry(R, 40, 28);
+    }
 
     for (const b of balls) {
       let mesh = this.ballMeshes.get(b.id);
 
       if (!mesh) {
-        // Ultra-smooth 64x48 sphere geometry eliminates polygon faceting
-        const geo = new THREE.SphereGeometry(R, 64, 48);
         const texture = createBallTexture(b.id);
+        texture.anisotropy = this.maxAnisotropy;
         // Authentic Aramith Phenolic Resin PBR material with mirror clearcoat and refractive index
         const mat = new THREE.MeshPhysicalMaterial({
           map: texture,
@@ -1346,69 +1332,76 @@ export class PoolGameRenderer {
           reflectivity: 0.55,
         });
 
-        mesh = new THREE.Mesh(geo, mat);
+        mesh = new THREE.Mesh(this.sharedBallGeometry, mat);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.scene.add(mesh);
         this.ballMeshes.set(b.id, mesh);
+        this.shadowDirty = true;
       }
 
       if (b.state === 'pocketed') {
+        if (mesh.visible) this.shadowDirty = true;
         mesh.visible = false;
         mesh.userData.lastPos = null;
-      } else {
-        mesh.visible = true;
-        mesh.position.set(b.position.x, R + b.height, b.position.z);
-
-        // 1:1 Physical rolling rotation strictly coupled to surface displacement
-        const lastPos = mesh.userData.lastPos as { x: number; z: number } | undefined;
-        if (lastPos) {
-          const dx = b.position.x - lastPos.x;
-          const dz = b.position.z - lastPos.z;
-          const dist = Math.hypot(dx, dz);
-
-          if (dist > 0.00001) {
-            // Authentic no-slip rolling rotation:
-            // For a sphere rolling on the x-z plane with +y up:
-            // Travel vector is (dx, 0, dz).
-            // Rolling rotation axis is (dz / dist, 0, -dx / dist).
-            // Angle rotated is dist / R radians.
-            const rollAngle = dist / R;
-            const rollAxis = new THREE.Vector3(dz / dist, 0, -dx / dist);
-            const rollQuat = new THREE.Quaternion().setFromAxisAngle(rollAxis, rollAngle);
-            mesh.quaternion.premultiply(rollQuat);
-          }
-        }
-
-        // Apply physical sliding slip (backspin/topspin differential while sliding)
-        if (b.state === 'sliding') {
-          // Angular slip difference between current angular velocity and pure rolling velocity
-          const wxSlip = b.angularVelocity.x - (b.velocity.z / R);
-          const wzSlip = b.angularVelocity.z - (-b.velocity.x / R);
-          const slipSpeed = Math.hypot(wxSlip, wzSlip);
-          if (slipSpeed > 0.05) {
-            const now = performance.now();
-            const lastTime = (mesh.userData.lastTime as number) || now;
-            const dt = Math.min(Math.max((now - lastTime) / 1000, 0.005), 0.033);
-            const slipAxis = new THREE.Vector3(wxSlip / slipSpeed, 0, wzSlip / slipSpeed);
-            const slipQuat = new THREE.Quaternion().setFromAxisAngle(slipAxis, slipSpeed * dt);
-            mesh.quaternion.premultiply(slipQuat);
-          }
-        }
-
-        // Apply vertical English spin around Y axis
-        if (Math.abs(b.angularVelocity.y) > 0.01) {
-          const now = performance.now();
-          const lastTime = (mesh.userData.lastTime as number) || now;
-          const dt = Math.min(Math.max((now - lastTime) / 1000, 0.005), 0.033);
-          const spinAngle = b.angularVelocity.y * dt;
-          const spinQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), spinAngle);
-          mesh.quaternion.premultiply(spinQuat);
-        }
-
-        mesh.userData.lastPos = { x: b.position.x, z: b.position.z };
-        mesh.userData.lastTime = performance.now();
+        continue;
       }
+
+      if (!mesh.visible) this.shadowDirty = true;
+      mesh.visible = true;
+
+      let px = b.position.x;
+      let pz = b.position.z;
+      let ph = b.height;
+      const before = prev?.get(b.id);
+      if (before && alpha < 1) {
+        px = before.x + (px - before.x) * alpha;
+        pz = before.z + (pz - before.z) * alpha;
+        ph = before.h + (ph - before.h) * alpha;
+      }
+      mesh.position.set(px, R + ph, pz);
+
+      // 1:1 Physical rolling rotation strictly coupled to surface displacement
+      const lastPos = mesh.userData.lastPos as { x: number; z: number } | undefined;
+      const now = performance.now();
+      const lastTime = (mesh.userData.lastTime as number) || now;
+      const dt = Math.min(Math.max((now - lastTime) / 1000, 0.005), 0.033);
+
+      if (lastPos) {
+        const dx = px - lastPos.x;
+        const dz = pz - lastPos.z;
+        const dist = Math.hypot(dx, dz);
+
+        if (dist > 0.00001) {
+          this.shadowDirty = true;
+          // Authentic no-slip rolling: axis (dz / dist, 0, -dx / dist), angle dist / R
+          _axis.set(dz / dist, 0, -dx / dist);
+          _quat.setFromAxisAngle(_axis, dist / R);
+          mesh.quaternion.premultiply(_quat);
+        }
+      }
+
+      // Apply physical sliding slip (backspin/topspin differential while sliding)
+      if (b.state === 'sliding') {
+        const wxSlip = b.angularVelocity.x - (b.velocity.z / R);
+        const wzSlip = b.angularVelocity.z - (-b.velocity.x / R);
+        const slipSpeed = Math.hypot(wxSlip, wzSlip);
+        if (slipSpeed > 0.05) {
+          _axis.set(wxSlip / slipSpeed, 0, wzSlip / slipSpeed);
+          _quat.setFromAxisAngle(_axis, slipSpeed * dt);
+          mesh.quaternion.premultiply(_quat);
+        }
+      }
+
+      // Apply vertical English spin around Y axis
+      if (Math.abs(b.angularVelocity.y) > 0.01) {
+        _axis.set(0, 1, 0);
+        _quat.setFromAxisAngle(_axis, b.angularVelocity.y * dt);
+        mesh.quaternion.premultiply(_quat);
+      }
+
+      mesh.userData.lastPos = { x: px, z: pz };
+      mesh.userData.lastTime = now;
     }
   }
 
@@ -1480,12 +1473,11 @@ export class PoolGameRenderer {
     // 1. Primary cue ball aiming guideline (emerges seamlessly from cue ball surface)
     if (this.trajectoryLine) {
       this.trajectoryLine.visible = true;
-      const points = [
-        new THREE.Vector3(traj.cueStart.x, yGuideline, traj.cueStart.z),
-        new THREE.Vector3(traj.cueHitPoint.x, yGuideline, traj.cueHitPoint.z),
-      ];
-      this.trajectoryLine.geometry.setFromPoints(points);
-      this.trajectoryLine.computeLineDistances();
+      setLineEndpoints(
+        this.trajectoryLine,
+        traj.cueStart.x, yGuideline, traj.cueStart.z,
+        traj.cueHitPoint.x, yGuideline, traj.cueHitPoint.z
+      );
 
       const cueMat = this.trajectoryLine.material as THREE.LineDashedMaterial;
       if (traj.cueWillPocket) {
@@ -1509,12 +1501,11 @@ export class PoolGameRenderer {
       const endX = traj.targetBallEnd ? traj.targetBallEnd.x : traj.targetBallStart.x + traj.targetBallDir!.x * 0.8;
       const endZ = traj.targetBallEnd ? traj.targetBallEnd.z : traj.targetBallStart.z + traj.targetBallDir!.z * 0.8;
 
-      const points = [
-        new THREE.Vector3(traj.targetBallStart.x, yGuideline, traj.targetBallStart.z),
-        new THREE.Vector3(endX, yGuideline, endZ),
-      ];
-      this.targetBallLine.geometry.setFromPoints(points);
-      this.targetBallLine.computeLineDistances();
+      setLineEndpoints(
+        this.targetBallLine,
+        traj.targetBallStart.x, yGuideline, traj.targetBallStart.z,
+        endX, yGuideline, endZ
+      );
 
       const targetMat = this.targetBallLine.material as THREE.LineDashedMaterial;
       if (traj.targetBallWillPocket) {
@@ -1535,16 +1526,11 @@ export class PoolGameRenderer {
     if (this.cueReflectLine && reflectDir) {
       this.cueReflectLine.visible = true;
       const reflectLen = 0.40;
-      const points = [
-        new THREE.Vector3(traj.cueHitPoint.x, yGuideline, traj.cueHitPoint.z),
-        new THREE.Vector3(
-          traj.cueHitPoint.x + reflectDir.x * reflectLen,
-          yGuideline,
-          traj.cueHitPoint.z + reflectDir.z * reflectLen
-        ),
-      ];
-      this.cueReflectLine.geometry.setFromPoints(points);
-      this.cueReflectLine.computeLineDistances();
+      setLineEndpoints(
+        this.cueReflectLine,
+        traj.cueHitPoint.x, yGuideline, traj.cueHitPoint.z,
+        traj.cueHitPoint.x + reflectDir.x * reflectLen, yGuideline, traj.cueHitPoint.z + reflectDir.z * reflectLen
+      );
     } else if (this.cueReflectLine) {
       this.cueReflectLine.visible = false;
     }
@@ -1602,7 +1588,7 @@ export class PoolGameRenderer {
     }
 
     // Smooth lerp camera movement
-    this.camera.position.lerp(this.targetCameraPos, 0.08);
+    this.camera.position.lerp(this.targetCameraPos, this.cameraLerp);
     this.camera.lookAt(this.targetCameraLookAt);
   }
 
@@ -1610,16 +1596,96 @@ export class PoolGameRenderer {
     if (!this.container || !this.renderer || !this.camera) return;
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
+    if (width === 0 || height === 0) return;
     this.camera.aspect = width / height;
     this.adjustCameraFov();
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.shadowDirty = true;
   };
 
+  /** Ask for the shadow map to be re-rendered on the next frame (it is otherwise frozen). */
+  public markShadowsDirty() {
+    this.shadowDirty = true;
+  }
+
+  /** Raise anisotropic filtering on every textured table/room material so the felt stays sharp at grazing angles. */
+  private applyTextureQuality() {
+    this.maxAnisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    const seen = new Set<THREE.Texture>();
+    this.scene.traverse(obj => {
+      const mat = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      if (!mat) return;
+      for (const m of Array.isArray(mat) ? mat : [mat]) {
+        const std = m as THREE.MeshStandardMaterial;
+        for (const tex of [std.map, std.bumpMap, std.emissiveMap, std.roughnessMap, std.normalMap]) {
+          if (tex && !seen.has(tex)) {
+            seen.add(tex);
+            tex.anisotropy = this.maxAnisotropy;
+            tex.needsUpdate = true;
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * Pick the highest pixel ratio the GPU can sustain. Drops quickly when frames run long,
+   * and cautiously climbs back up (never to a level that recently failed).
+   */
+  private adaptResolution(frameMs: number, nowMs: number) {
+    if (document.hidden || frameMs > 250) return; // tab switch / debugger pause, not a real signal
+    this.perfFrames++;
+    this.perfTimeMs += frameMs;
+    if (this.perfFrames < 20) return;
+
+    const avg = this.perfTimeMs / this.perfFrames;
+    this.perfFrames = 0;
+    this.perfTimeMs = 0;
+
+    const MIN_RATIO = 0.75;
+    if (avg > 21 && this.pixelRatio > MIN_RATIO) {
+      this.bannedRatio = this.pixelRatio;
+      this.bannedUntil = nowMs + 30000;
+      this.stableMs = 0;
+      this.setPixelRatio(Math.max(MIN_RATIO, this.pixelRatio * (avg > 32 ? 0.75 : 0.88)));
+    } else if (avg <= 18.5) {
+      this.stableMs += avg * 20;
+      const next = Math.min(this.maxPixelRatio, this.pixelRatio * 1.15);
+      const banned = nowMs < this.bannedUntil && next >= this.bannedRatio * 0.97;
+      if (this.stableMs > 4000 && this.pixelRatio < this.maxPixelRatio && !banned) {
+        this.stableMs = 0;
+        this.setPixelRatio(next);
+      }
+    } else {
+      this.stableMs = 0;
+    }
+  }
+
+  private setPixelRatio(ratio: number) {
+    this.pixelRatio = Math.round(ratio * 100) / 100;
+    this.renderer.setPixelRatio(this.pixelRatio);
+    this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+    this.shadowDirty = true;
+  }
+
   private startRenderLoop() {
-    const loop = () => {
-      this.renderer.render(this.scene, this.camera);
+    const loop = (ts: number) => {
       this.animationFrameId = requestAnimationFrame(loop);
+
+      const frameMs = this.lastFrameTs ? ts - this.lastFrameTs : 16.7;
+      this.lastFrameTs = ts;
+      // Frame-rate independent camera smoothing (matches the old 0.08/frame at 60fps)
+      this.cameraLerp = 1 - Math.pow(1 - 0.08, Math.min(frameMs, 100) / 16.667);
+      this.adaptResolution(frameMs, ts);
+
+      this.onFrame?.(ts);
+
+      if (this.shadowDirty) {
+        this.renderer.shadowMap.needsUpdate = true;
+        this.shadowDirty = false;
+      }
+      this.renderer.render(this.scene, this.camera);
     };
     this.animationFrameId = requestAnimationFrame(loop);
   }
@@ -1628,13 +1694,85 @@ export class PoolGameRenderer {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
     }
+    this.onFrame = null;
     window.removeEventListener('resize', this.onResize);
     window.visualViewport?.removeEventListener('resize', this.onResize);
+
+    // Release GPU memory so repeated games / page visits don't accumulate textures and geometry
+    const textures = new Set<THREE.Texture>();
+    this.scene.traverse(obj => {
+      const mesh = obj as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (!mat) return;
+      for (const m of Array.isArray(mat) ? mat : [mat]) {
+        for (const value of Object.values(m)) {
+          if (value instanceof THREE.Texture) textures.add(value);
+        }
+        m.dispose();
+      }
+    });
+    textures.forEach(t => t.dispose());
+    (this.scene.environment as THREE.Texture | null)?.dispose();
+
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
     if (this.renderer.domElement.parentElement) {
       this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
     }
   }
+}
+
+// Scratch objects reused every frame to avoid per-frame garbage
+const _axis = new THREE.Vector3();
+const _quat = new THREE.Quaternion();
+const _raycaster = new THREE.Raycaster();
+const _ndc = new THREE.Vector2();
+const _tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const _target = new THREE.Vector3();
+
+/** Previous-step pose of each ball, used for render interpolation. */
+export type BallPoseStore = Map<number, { x: number; z: number; h: number }>;
+
+/** Copy the current ball poses into `store`, reusing its entries. Call before each physics step. */
+export function captureBallPoses(balls: BallPhysicsState[], store: BallPoseStore) {
+  for (const b of balls) {
+    const e = store.get(b.id);
+    if (e) {
+      e.x = b.position.x;
+      e.z = b.position.z;
+      e.h = b.height;
+    } else {
+      store.set(b.id, { x: b.position.x, z: b.position.z, h: b.height });
+    }
+  }
+}
+
+/** Line with a fixed two-vertex position + lineDistance buffer that is updated in place. */
+function createDynamicLineGeometry(): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  const pos = new THREE.BufferAttribute(new Float32Array(6), 3);
+  const dist = new THREE.BufferAttribute(new Float32Array(2), 1);
+  pos.setUsage(THREE.DynamicDrawUsage);
+  dist.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('position', pos);
+  geo.setAttribute('lineDistance', dist);
+  return geo;
+}
+
+function setLineEndpoints(
+  line: THREE.Line,
+  ax: number, ay: number, az: number,
+  bx: number, by: number, bz: number
+) {
+  const pos = line.geometry.getAttribute('position') as THREE.BufferAttribute;
+  const dist = line.geometry.getAttribute('lineDistance') as THREE.BufferAttribute;
+  pos.setXYZ(0, ax, ay, az);
+  pos.setXYZ(1, bx, by, bz);
+  dist.setX(0, 0);
+  dist.setX(1, Math.hypot(bx - ax, by - ay, bz - az));
+  pos.needsUpdate = true;
+  dist.needsUpdate = true;
 }
 
 /**

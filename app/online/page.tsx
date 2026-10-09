@@ -14,7 +14,7 @@ import { MultiplayerService } from '../../multiplayer/service';
 import { MatchDocument, MatchPlayer, LiveAimState } from '../../multiplayer/types';
 import { BilliardsPhysicsEngine } from '../../physics/engine';
 import { EightBallRulesEngine } from '../../rules/engine';
-import { PoolGameRenderer } from '../../game/scene';
+import { PoolGameRenderer, captureBallPoses, BallPoseStore } from '../../game/scene';
 import { soundFX } from '../../game/sound';
 import { TABLE_CONSTANTS } from '../../physics/constants';
 import { ShotParameters, BallPhysicsState } from '../../physics/types';
@@ -60,7 +60,6 @@ function OnlineMultiplayerContent() {
   const rulesRef = useRef<EightBallRulesEngine | null>(null);
   const lastShotSeqRef = useRef<number>(0);
 
-  const [aimAngle, setAimAngle] = useState(0);
   const [power, setPower] = useState(0.5);
   const [spinX, setSpinX] = useState(0);
   const [spinY, setSpinY] = useState(0);
@@ -70,8 +69,8 @@ function OnlineMultiplayerContent() {
   const [isPlacementValid, setIsPlacementValid] = useState(true);
 
   // Ref tracking for requestAnimationFrame loop to prevent stale closures
-  const aimAngleRef = useRef(aimAngle);
-  aimAngleRef.current = aimAngle;
+  // Aim lives only in a ref (read every frame by the render loop), so dragging never re-renders React
+  const aimAngleRef = useRef(0);
   const powerRef = useRef(power);
   powerRef.current = power;
   const isShootingRef = useRef(isShooting);
@@ -306,10 +305,11 @@ function OnlineMultiplayerContent() {
 
     let accumulator = 0;
     let lastTime = performance.now();
-    let animId: number;
+    const prevPoses: BallPoseStore = new Map();
+    captureBallPoses(physics.getBalls(), prevPoses);
 
+    // Driven by the renderer's single rAF so state updates and drawing share one frame
     const loop = (now: number) => {
-      animId = requestAnimationFrame(loop);
       const dt = Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
       accumulator += dt;
@@ -318,6 +318,7 @@ function OnlineMultiplayerContent() {
       while (accumulator >= TABLE_CONSTANTS.FIXED_TIMESTEP) {
         if (physics.isMoving()) {
           movedInThisFrame = true;
+          captureBallPoses(physics.getBalls(), prevPoses);
           const snapshot = physics.step(TABLE_CONSTANTS.FIXED_TIMESTEP);
 
           for (const ev of snapshot.events) {
@@ -330,7 +331,8 @@ function OnlineMultiplayerContent() {
       }
 
       if (movedInThisFrame || physics.isMoving()) {
-        renderer.updateBalls(physics.getBalls());
+        // Interpolate between the last two fixed steps so motion doesn't judder
+        renderer.updateBalls(physics.getBalls(), prevPoses, accumulator / TABLE_CONSTANTS.FIXED_TIMESTEP);
         renderer.updateCueStick(physics.getCueBall(), aimAngleRef.current, 0, false);
         renderer.updateTrajectory(null, false);
         renderer.updateBallInHandGuide(false);
@@ -402,10 +404,9 @@ function OnlineMultiplayerContent() {
       }
     };
 
-    animId = requestAnimationFrame(loop);
+    renderer.onFrame = loop;
 
     return () => {
-      cancelAnimationFrame(animId);
       renderer.dispose();
       rendererRef.current = null;
     };
@@ -427,7 +428,7 @@ function OnlineMultiplayerContent() {
 
     const shotParams: ShotParameters = {
       power,
-      angle: aimAngle,
+      angle: aimAngleRef.current,
       spinX,
       spinY,
     };
@@ -508,11 +509,9 @@ function OnlineMultiplayerContent() {
     const deltaX = e.clientX - lastPointerX.current;
     lastPointerX.current = e.clientX;
     const sensitivity = 0.0024;
-    setAimAngle(prev => {
-      const next = prev + deltaX * sensitivity;
-      broadcastLiveAimState({ customAim: next });
-      return next;
-    });
+    const next = aimAngleRef.current + deltaX * sensitivity;
+    aimAngleRef.current = next;
+    broadcastLiveAimState({ customAim: next });
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -540,7 +539,7 @@ function OnlineMultiplayerContent() {
           const dx = closestBall.position.x - cue.position.x;
           const dz = closestBall.position.z - cue.position.z;
           const newAngle = Math.atan2(dz, dx);
-          setAimAngle(newAngle);
+          aimAngleRef.current = newAngle;
           broadcastLiveAimState({ customAim: newAngle, immediate: true });
         }
       }
@@ -550,11 +549,9 @@ function OnlineMultiplayerContent() {
   const handleWheel = (e: React.WheelEvent) => {
     if (!isMyTurn || isShooting) return;
     e.preventDefault();
-    setAimAngle(a => {
-      const next = a + e.deltaY * 0.0008;
-      broadcastLiveAimState({ customAim: next });
-      return next;
-    });
+    const next = aimAngleRef.current + e.deltaY * 0.0008;
+    aimAngleRef.current = next;
+    broadcastLiveAimState({ customAim: next });
   };
 
   const handleConfirmPlacement = async () => {
