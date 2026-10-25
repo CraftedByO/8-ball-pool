@@ -169,7 +169,9 @@ export class PoolGameRenderer {
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-    this.pixelRatio = Math.min(this.maxPixelRatio, 1.5);
+    // Phones have small, dense screens: start at full native density (capped) instead of upscaling a soft 1.5x image
+    const isTouch = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    this.pixelRatio = isTouch ? this.maxPixelRatio : Math.min(this.maxPixelRatio, 1.5);
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(width, height);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1347,7 +1349,8 @@ export class PoolGameRenderer {
     this.perfFrames = 0;
     this.perfTimeMs = 0;
 
-    const MIN_RATIO = 0.75;
+    // Never render below one pixel per CSS pixel: on a phone-sized canvas that is visibly blurry
+    const MIN_RATIO = Math.min(1, this.maxPixelRatio);
     if (avg > 21 && this.pixelRatio > MIN_RATIO) {
       this.bannedRatio = this.pixelRatio;
       this.bannedUntil = nowMs + 30000;
